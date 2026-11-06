@@ -22,8 +22,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '@/context/auth-context';
+import { InspectionSummary } from '@/components/inspection/inspection-card';
 import { useLanguage } from '@/context/language-context';
 import { Suspense } from 'react';
 
@@ -149,6 +151,11 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   };
 
   const tile = 'rounded-3xl bg-tile';
+
+  // The inspection the team did before (and after) the wash. Customers only ever receive sent ones.
+  const beforeInspection = mockStore.getInspection(order.id, 'BEFORE');
+  const afterInspection = mockStore.getInspection(order.id, 'AFTER');
+  const showInspection = beforeInspection?.status === 'SUBMITTED';
   const ChevronBack = isRtl ? ChevronRight : ChevronLeft;
   const ArrowFwd = isRtl ? ArrowLeft : ArrowRight;
 
@@ -157,9 +164,9 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
       {/* Top bar */}
       <header className="sticky top-0 z-30 h-14 bg-canvas/80 backdrop-blur-xl">
         <div className="max-w-[1040px] mx-auto h-full px-4 md:px-8 flex items-center justify-between gap-3">
-          <Link href="/" className="flex items-center gap-1.5 text-sm text-link hover:text-link-soft py-2 whitespace-nowrap">
+          <Link href="/orders" className="flex items-center gap-1.5 text-sm text-link hover:text-link-soft py-2 whitespace-nowrap">
             <ChevronBack className="h-5 w-5" />
-            <span>{isRtl ? 'الرئيسية' : 'Portal'}</span>
+            <span>{isRtl ? 'سجل الطلبات' : 'History'}</span>
           </Link>
 
           <div className="text-center min-w-0">
@@ -280,7 +287,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                 </div>
                 <div className="min-w-0">
                   <span className="text-sm text-muted block">
-                    {isRtl ? 'الفني الميداني المسؤول' : 'Your technician'}
+                    {isRtl ? 'الفريق المسؤول' : 'Your team'}
                   </span>
                   <span className="text-[15px] font-semibold text-ink block truncate">{order.assignment.assignedName}</span>
                 </div>
@@ -296,6 +303,30 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               >
                 <MessageSquare className="h-5 w-5" />
               </a>
+            </div>
+          )}
+
+          {/* Inspection */}
+          {showInspection && beforeInspection && (
+            <div className={`${tile} p-5 space-y-4`}>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-emerald-400/15 flex items-center justify-center flex-shrink-0">
+                  <ShieldCheck className="h-5 w-5 text-emerald-400" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[15px] font-semibold text-ink">
+                    {isRtl ? 'تم فحص سيارتك قبل الغسيل' : 'Your car was inspected before the wash'}
+                  </p>
+                  {beforeInspection.submittedAt && (
+                    <p className="text-sm text-muted tabular-nums">{formatDateTime(beforeInspection.submittedAt)}</p>
+                  )}
+                </div>
+              </div>
+              <InspectionSummary
+                before={beforeInspection}
+                after={afterInspection?.status === 'SUBMITTED' ? afterInspection : undefined}
+                onOpenImage={setLightboxPhoto}
+              />
             </div>
           )}
 

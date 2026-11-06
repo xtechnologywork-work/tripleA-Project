@@ -2,10 +2,12 @@
 
 import React, { Suspense, useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import Image from 'next/image';
 import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { compressImage } from '@/lib/image';
+import { StatusBadge } from '@/components/ui/status-badge';
 import type { ActorContext } from '@/domain/status-machine';
 import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
@@ -31,14 +33,12 @@ import {
   CheckCircle2,
   Edit3,
   Car,
+  Clock,
   LogOut,
   MessageSquare,
-  TrendingUp,
-  Receipt,
   BadgeCheck,
   Trash2,
   AlertCircle,
-  CreditCard,
 } from 'lucide-react';
 
 type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
@@ -183,10 +183,11 @@ function BayOrderingClientScreen() {
     setRefreshTrigger((prev) => prev + 1);
   };
 
-  // Restore the portal after a reload in the same tab
+  // Reopening the app on a device that is already signed in goes straight to the account
   useEffect(() => {
     try {
-      if (sessionStorage.getItem('triplea_portal_mode') === 'EMPLOYEE' && mockStore.getEmployeeToken()) {
+      const savedPhone = localStorage.getItem('cb_active_employee_phone') || '';
+      if (mockStore.getEmployeeToken() && savedPhone && mockStore.getEmployeeByPhone(savedPhone)) {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- restore the session on load
         setPortalMode('EMPLOYEE');
       }
@@ -324,14 +325,11 @@ function BayOrderingClientScreen() {
   const hasActiveSubscription = !!activeSub;
   const employeeCredits = currentEmployee ? mockStore.getCreditBalance(currentEmployee.id) : 0;
   const employeeOrders = currentEmployee ? mockStore.getEmployeeOrders(currentEmployee.id) : [];
-  const completedOrders = employeeOrders.filter(
-    (o) => o.status === 'COMPLETED' || o.status === 'RETURNED_TO_PARKING'
-  );
-  const lastOrder = employeeOrders.length > 0 ? employeeOrders[0] : null;
+  // Orders that are not finished yet: shown at the top so the tracking page is always one tap away
+  const activeOrders = employeeOrders.filter((o) => o.status !== 'RETURNED_TO_PARKING' && o.status !== 'CANCELLED');
   const registeredVehicle = currentEmployee
     ? mockStore.getEmployeeVehicles(currentEmployee.id)[0]
     : null;
-  const totalSavingsQar = completedOrders.length * 10 + (hasActiveSubscription ? 100 : 0);
 
   // Checkout modal state
   const [selectedPlan, setSelectedPlan] = useState<{
@@ -979,6 +977,26 @@ function BayOrderingClientScreen() {
             </section>
           )}
 
+          {employeeOrders.length > 0 && (
+            <Link
+              href="/orders"
+              className={`${tile} hover:bg-tile-hover p-4 md:p-5 flex items-center justify-between gap-4 transition-colors group`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <Clock className="h-5 w-5 text-muted flex-shrink-0" />
+                <span className="text-[15px] font-semibold text-ink truncate">{t('orderHistoryTitle')}</span>
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0">
+                {activeOrders.length > 0 && (
+                  <span className="inline-flex px-3 py-1 rounded-full bg-[#2997ff]/15 text-sm font-medium text-link-soft whitespace-nowrap">
+                    {activeOrders.length} {t('inProgressLabel')}
+                  </span>
+                )}
+                <ChevronFwd className="h-5 w-5 text-dim group-hover:text-ink transition-colors" />
+              </div>
+            </Link>
+          )}
+
           {/* Plans */}
           <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {(
@@ -1055,449 +1073,206 @@ function BayOrderingClientScreen() {
           className="fixed inset-0 z-50 bg-canvas min-h-[100dvh] overflow-y-auto animate-in fade-in slide-in-from-bottom-2 duration-200 text-ink"
         >
           <div className="sticky top-0 z-40 h-14 bg-canvas/80 backdrop-blur-xl">
-            <div className="max-w-[1040px] mx-auto h-full px-4 md:px-8 flex items-center justify-between gap-3">
+            <div className="max-w-[560px] mx-auto h-full px-4 flex items-center justify-between gap-3">
               <button
                 onClick={() => {
                   setIsEditingProfile(false);
                   setShowProfileModal(false);
                 }}
-                className="flex items-center gap-1.5 text-sm text-link hover:text-link-soft py-2 whitespace-nowrap"
+                className="flex items-center gap-1.5 text-sm text-link hover:opacity-80 py-2 whitespace-nowrap"
               >
                 <ChevronBack className="h-5 w-5" />
                 <span>{t('backToServices')}</span>
               </button>
 
-              <div className="text-center min-w-0">
-                <h2 className="text-[14px] font-semibold text-ink leading-tight truncate">{t('myProfileSectionTitle')}</h2>
-                <span className="text-xs text-dim block truncate">{t('profileSubtitle')}</span>
-              </div>
+              <h2 className="text-[15px] font-semibold text-ink truncate">{t('myProfileSectionTitle')}</h2>
 
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    setIsEditingProfile(false);
-                    setShowProfileModal(false);
-                  }}
-                  className="w-9 h-9 rounded-full bg-fill hover:bg-fill-strong text-body flex items-center justify-center"
-                  title={t('closeBtn')}
-                  aria-label={t('closeBtn')}
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
+              <button
+                onClick={() => {
+                  setIsEditingProfile(false);
+                  setShowProfileModal(false);
+                }}
+                className="w-9 h-9 rounded-full bg-fill hover:bg-fill-strong text-body flex items-center justify-center"
+                title={t('closeBtn')}
+                aria-label={t('closeBtn')}
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
           </div>
 
-          <div className="max-w-[1040px] mx-auto px-4 md:px-8 py-6 pb-24 grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+          <div className="max-w-[560px] mx-auto px-4 py-4 pb-20 space-y-3">
             {profileSaveSuccess && (
-              <div className="lg:col-span-2 flex items-center gap-3 p-4 rounded-2xl bg-emerald-400/15 text-emerald-300 text-[14px] font-medium animate-in fade-in zoom-in-95 duration-200">
-                <CheckCircle2 className="h-5 w-5 text-emerald-400 flex-shrink-0" />
+              <div className="flex items-center gap-3 p-4 rounded-2xl bg-emerald-400/15 text-emerald-300 text-sm font-medium">
+                <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
                 <span>{t('savedSuccess')}</span>
               </div>
             )}
 
-            {/* Left column */}
-            <div className="space-y-4">
-              {/* Digital pass */}
-              <div className={`relative ${tile} p-6 overflow-hidden`}>
-                <div className="absolute -bottom-10 -end-10 w-48 h-48 opacity-[0.05] pointer-events-none select-none">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/images/qatar-moci-logo.png" alt="" className="w-full h-full object-contain filter invert light:filter-none" />
+            {isEditingProfile ? (
+              <section className={`${tile} p-6 space-y-4`}>
+                <div>
+                  <label className="text-sm text-muted block mb-1.5">{t('fullNameLabel')}</label>
+                  <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className={fieldCls} />
                 </div>
-
-                <div className="flex items-start justify-between mb-8 relative z-10">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-logo-chip p-1.5 flex items-center justify-center flex-shrink-0">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src="/images/qatar-moci-logo.png" alt="MOCI Qatar Crest" className="w-full h-full object-contain" />
-                    </div>
-                    <div>
-                      <span className="text-sm text-muted block">{t('corporateVerifiedBadge')}</span>
-                      <span className="text-sm font-semibold text-ink block">{t('vipMemberTier')}</span>
-                    </div>
-                  </div>
-                  <span className="text-xs text-body bg-fill px-2.5 py-1 rounded-full font-medium">MOCI-VIP</span>
+                <div>
+                  <label className="text-sm text-muted block mb-1.5">{t('qatarPhoneLabel')}</label>
+                  <input type="tel" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className={`${fieldCls} tabular-nums`} />
                 </div>
-
-                <div className="relative z-10 mb-8 space-y-1.5">
-                  <span className="text-sm text-muted block">{t('fullNameLabel')}</span>
-                  <h3 className="text-[24px] font-semibold text-ink tracking-tight leading-tight">
-                    {currentEmployee?.fullName || t('ministryEmployeeTitle')}
-                  </h3>
-                  <div className="flex flex-wrap items-center gap-3 pt-1 text-sm text-body">
-                    <div className="flex items-center gap-1.5 tabular-nums">
-                      <Phone className="h-4 w-4 text-muted" />
-                      <span dir="ltr">{currentEmployee?.phone || employeePhone}</span>
-                    </div>
-                    {currentEmployee?.qid && (
-                      <div className="flex items-center gap-1.5 bg-fill px-3 py-1 rounded-full tabular-nums">
-                        <CreditCard className="h-4 w-4 text-muted" />
-                        <span>QID: {currentEmployee.qid}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="relative z-10 flex items-center justify-between">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <span className="text-sm text-muted block mb-0.5">{t('digitalCardBadge')}</span>
-                    <span className="text-sm text-body tabular-nums">
-                      {t('employeeNoLabel')}: {currentEmployee?.employeeNo || `MOCI-${(currentEmployee?.phone || '8901').slice(-4)}`}
-                    </span>
+                    <label className="text-sm text-muted block mb-1.5">{t('plateNumberLabelShort')}</label>
+                    <input type="text" value={editPlate} onChange={(e) => setEditPlate(e.target.value)} className={`${fieldCls} tabular-nums`} />
                   </div>
-
-                  <div className="flex items-center gap-0.5 opacity-70" aria-hidden="true">
-                    {[1.5, 3, 1, 2, 4, 1, 2.5, 1, 3.5, 1.5].map((w, i) => (
-                      <span key={i} className="h-7 bg-ink" style={{ width: `${w}px` }} />
-                    ))}
+                  <div>
+                    <label className="text-sm text-muted block mb-1.5">{t('colorLabel')}</label>
+                    <input type="text" value={editColor} onChange={(e) => setEditColor(e.target.value)} className={fieldCls} />
                   </div>
                 </div>
-              </div>
-
-              {/* Subscription */}
-              <div className={`${tile} p-6 space-y-5`}>
-                {hasActiveSubscription ? (
-                  <>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                          <span className="text-[15px] font-semibold text-ink">{t('subscriptionCardTitle')}</span>
-                        </div>
-                        <span className="text-sm text-muted">{t('subscriptionCardSubtitle')}</span>
-                      </div>
-                      <span className="text-sm text-emerald-300 bg-emerald-400/15 px-3 py-1 rounded-full whitespace-nowrap">
-                        {t('statusActive')}
-                      </span>
-                    </div>
-
-                    <div className={`${inner} p-5 flex items-center justify-between gap-3`}>
-                      <div>
-                        <span className="text-sm text-muted block">{t('creditsBalanceLabel')}</span>
-                        <span className="text-sm text-body mt-0.5 block">{t('freeWashes2')}</span>
-                      </div>
-                      <div className="text-end">
-                        <span className="text-[32px] leading-none font-semibold text-ink tabular-nums">{employeeCredits}</span>
-                        <span className="text-sm text-muted ms-2">{t('washesLeftLabel')}</span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setShowProfileModal(false);
-                        setSelectedPlan({
-                          id: 'one-time',
-                          title: t('oneTimeWash'),
-                          subtitle: t('oneTimeDesc'),
-                          price: 20,
-                          creditsCost: 1,
-                          paymentMode: 'CREDIT',
-                          badge: t('mociBenefitBadge'),
-                        });
-                      }}
-                      className={`${primaryBtn} w-full py-3`}
-                    >
-                      <Sparkles className="h-4 w-4" />
-                      <span>
-                        {t('confirmOrderBtn')} ({t('qar')} 0 · {t('washesLeftLabel')})
-                      </span>
-                    </button>
-
-                    <ul className="space-y-3 text-[14px] text-body pt-1">
-                      {[t('benefit1'), t('benefit2'), t('benefit3')].map((b, i) => (
-                        <li key={i} className="flex items-start gap-3">
-                          <Check className="h-4 w-4 text-link flex-shrink-0 mt-1" />
-                          <span>{b}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-zinc-500" />
-                          <span className="text-[15px] font-semibold text-ink">{t('subscriptionCardTitle')}</span>
-                        </div>
-                        <span className="text-sm text-muted">{t('subscriptionCardSubtitle')}</span>
-                      </div>
-
-                      <div className="flex items-baseline gap-1.5 flex-shrink-0">
-                        <span className="text-[26px] leading-none font-semibold text-ink tabular-nums">140</span>
-                        <span className="text-sm text-muted">{t('qar')}</span>
-                        <span className="text-sm text-dim line-through tabular-nums">240</span>
-                      </div>
-                    </div>
-
-                    <div className={`${inner} p-5 space-y-1.5`}>
-                      <p className="text-[14px] font-semibold text-ink">{t('promoSaveHeadline')}</p>
-                      <p className="text-sm text-muted leading-relaxed">{t('promoSaveDesc')}</p>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setShowProfileModal(false);
-                        setSelectedPlan({
-                          id: 'subscription-8',
-                          title: t('subscription8'),
-                          subtitle: t('subscriptionDesc'),
-                          price: 140,
-                          creditsCost: 1,
-                          paymentMode: 'ONE_TIME',
-                          badge: t('bestValueBadge'),
-                        });
-                      }}
-                      className={`${primaryBtn} w-full py-3`}
-                    >
-                      <Zap className="h-4 w-4" />
-                      <span>{t('activateSubNowBtn')}</span>
-                      <ArrowFwd className="h-4 w-4" />
-                    </button>
-                  </>
-                )}
-              </div>
-
-              {/* Savings */}
-              <div className={`${tile} p-6 flex items-center justify-between gap-4`}>
-                <div className="space-y-1.5 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4 text-link" />
-                    <span className="text-[14px] font-semibold text-ink">{t('totalSavingsTitle')}</span>
-                  </div>
-                  <p className="text-sm text-muted">{t('totalSavingsDesc')}</p>
+                <div>
+                  <label className="text-sm text-muted block mb-1.5">{t('vehicleMake')}</label>
+                  <input type="text" value={editMakeModel} onChange={(e) => setEditMakeModel(e.target.value)} className={fieldCls} />
                 </div>
-
-                <div className="text-end flex-shrink-0">
-                  <div className="flex items-baseline gap-1.5 justify-end">
-                    <span className="text-[26px] leading-none font-semibold text-ink tabular-nums">
-                      +{totalSavingsQar > 0 ? totalSavingsQar : 100}
-                    </span>
-                    <span className="text-sm text-muted">{t('qar')}</span>
-                  </div>
-                  <span className="text-sm text-dim block mt-1">{t('mociBenefitBadge')}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Right column */}
-            <div className="space-y-4">
-              {/* Vehicle and details */}
-              <div className={`${tile} p-6 space-y-5`}>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <Car className="h-5 w-5 text-body" />
-                    <h4 className="text-[15px] font-semibold text-ink">{t('vehicleDetailsTitle')}</h4>
-                  </div>
-
-                  <button
-                    onClick={() => setIsEditingProfile(!isEditingProfile)}
-                    className="flex items-center gap-1.5 text-sm text-ink bg-fill hover:bg-fill-strong px-4 py-2 rounded-full whitespace-nowrap"
-                  >
-                    <Edit3 className="h-3.5 w-3.5" />
-                    <span>{isEditingProfile ? t('cancelEdit') : t('editProfile')}</span>
+                <div className="flex items-center gap-3 pt-1">
+                  <button onClick={handleSaveProfile} className={`${primaryBtn} flex-1 py-3`}>
+                    <Check className="h-4 w-4" />
+                    <span>{t('saveChanges')}</span>
+                  </button>
+                  <button onClick={() => setIsEditingProfile(false)} className={`${softBtn} px-6 py-3`}>
+                    {t('cancelEdit')}
                   </button>
                 </div>
-
-                {isEditingProfile ? (
-                  <div className="space-y-4 animate-in fade-in duration-200">
-                    <div>
-                      <label className="text-sm text-muted block mb-1.5">{t('fullNameLabel')}</label>
-                      <input
-                        type="text"
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        placeholder={t('fullNamePlaceholder')}
-                        className={fieldCls}
-                      />
+              </section>
+            ) : (
+              <>
+                {/* Who you are */}
+                <section className={`${tile} p-6`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <h3 className="text-[24px] font-semibold text-ink tracking-tight leading-tight truncate">
+                        {currentEmployee?.fullName}
+                      </h3>
+                      <p className="text-sm text-muted tabular-nums" dir="ltr">{currentEmployee?.phone || employeePhone}</p>
+                      <p className="text-sm text-muted tabular-nums">
+                        {t('employeeNoLabel')}: {currentEmployee?.employeeNo}
+                      </p>
                     </div>
-
-                    <div>
-                      <label className="text-sm text-muted block mb-1.5">{t('qatarPhoneLabel')}</label>
-                      <input
-                        type="tel"
-                        value={editPhone}
-                        onChange={(e) => setEditPhone(e.target.value)}
-                        placeholder="5512 8901"
-                        className={`${fieldCls} tabular-nums`}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-sm text-muted block mb-1.5">{t('qidLabel')}</label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={11}
-                        value={editQid}
-                        onChange={(e) => setEditQid(e.target.value.replace(/\D/g, '').slice(0, 11))}
-                        placeholder="29012345678"
-                        className={`${fieldCls} tabular-nums`}
-                      />
-                    </div>
-
-                    <div className="pt-2 space-y-3">
-                      <span className="text-sm font-semibold text-body block">{t('vehicleDetailsTitle')}</span>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-sm text-muted block mb-1.5">{t('plateNumberLabelShort')}</label>
-                          <input
-                            type="text"
-                            value={editPlate}
-                            onChange={(e) => setEditPlate(e.target.value)}
-                            placeholder="559201"
-                            className={`${fieldCls} tabular-nums font-semibold`}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-sm text-muted block mb-1.5">{t('colorLabel')}</label>
-                          <input
-                            type="text"
-                            value={editColor}
-                            onChange={(e) => setEditColor(e.target.value)}
-                            placeholder="Jet Black"
-                            className={fieldCls}
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="text-sm text-muted block mb-1.5">{t('vehicleMake')}</label>
-                        <input
-                          type="text"
-                          value={editMakeModel}
-                          onChange={(e) => setEditMakeModel(e.target.value)}
-                          placeholder="Porsche Panamera"
-                          className={fieldCls}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-2 flex items-center gap-3">
-                      <button onClick={handleSaveProfile} className={`${primaryBtn} flex-1 py-3`}>
-                        <Check className="h-4 w-4" />
-                        <span>{t('saveChanges')}</span>
-                      </button>
-                      <button onClick={() => setIsEditingProfile(false)} className={`${softBtn} px-6 py-3`}>
-                        {t('cancelEdit')}
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => setIsEditingProfile(true)}
+                      className="flex items-center gap-1.5 text-sm text-ink bg-fill hover:bg-fill-strong px-4 py-2 rounded-full whitespace-nowrap flex-shrink-0"
+                    >
+                      <Edit3 className="h-3.5 w-3.5" />
+                      <span>{t('editProfile')}</span>
+                    </button>
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className={`${inner} p-5 flex items-center justify-between gap-3`}>
+                </section>
+
+                {/* Wash pass */}
+                <section className={`${tile} p-6 space-y-4`}>
+                  {hasActiveSubscription ? (
+                    <>
+                      <div className="flex items-end justify-between gap-3">
+                        <div>
+                          <p className="text-sm text-muted">{t('subscriptionCardTitle')}</p>
+                          <p className="text-sm text-dim mt-0.5">{t('creditsBalanceLabel')}</p>
+                        </div>
+                        <div className="text-end">
+                          <span className="text-[40px] leading-none font-semibold text-ink tabular-nums">{employeeCredits}</span>
+                          <span className="text-sm text-muted ms-2">{t('washesLeftLabel')}</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setShowProfileModal(false);
+                          setSelectedPlan({
+                            id: 'one-time',
+                            title: t('oneTimeWash'),
+                            subtitle: t('oneTimeDesc'),
+                            price: 20,
+                            creditsCost: 1,
+                            paymentMode: 'CREDIT',
+                            badge: t('mociBenefitBadge'),
+                          });
+                        }}
+                        className={`${primaryBtn} w-full py-3`}
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        <span>{t('confirmOrderBtn')}</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-end justify-between gap-3">
+                        <div>
+                          <p className="text-[17px] font-semibold text-ink">{t('subscriptionCardTitle')}</p>
+                          <p className="text-sm text-muted mt-0.5">{t('subscriptionCardSubtitle')}</p>
+                        </div>
+                        <div className="flex items-baseline gap-1.5 flex-shrink-0">
+                          <span className="text-[30px] leading-none font-semibold text-ink tabular-nums">140</span>
+                          <span className="text-sm text-muted">{t('qar')}</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setShowProfileModal(false);
+                          setSelectedPlan({
+                            id: 'subscription-8',
+                            title: t('subscription8'),
+                            subtitle: t('subscriptionDesc'),
+                            price: 140,
+                            creditsCost: 1,
+                            paymentMode: 'ONE_TIME',
+                            badge: t('bestValueBadge'),
+                          });
+                        }}
+                        className={`${primaryBtn} w-full py-3`}
+                      >
+                        <Zap className="h-4 w-4" />
+                        <span>{t('activateSubNowBtn')}</span>
+                        <ArrowFwd className="h-4 w-4" />
+                      </button>
+                    </>
+                  )}
+                </section>
+
+                {/* Vehicle */}
+                <section className={`${tile} p-6 flex items-center justify-between gap-3`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Car className="h-5 w-5 text-muted flex-shrink-0" />
+                    {registeredVehicle ? (
                       <div className="min-w-0">
-                        <span className="text-[15px] font-semibold text-ink block truncate">
-                          {registeredVehicle
-                            ? `${registeredVehicle.make || ''} ${registeredVehicle.model || ''}`.trim() || 'Porsche Panamera'
-                            : 'Porsche Panamera'}
-                        </span>
-                        <span className="text-sm text-muted">
-                          {registeredVehicle?.color || editColor || 'Jet Black Metallic'}
-                        </span>
+                        <p className="text-[15px] font-semibold text-ink truncate">
+                          {`${registeredVehicle.make || ''} ${registeredVehicle.model || ''}`.trim() || t('vehicleDetailsTitle')}
+                        </p>
+                        {registeredVehicle.color && <p className="text-sm text-muted">{registeredVehicle.color}</p>}
                       </div>
-
-                      <div className="text-end flex-shrink-0">
-                        <span className="text-[14px] font-semibold tabular-nums text-ink bg-fill px-3.5 py-1 rounded-full block">
-                          {registeredVehicle?.plateNumber || plateNumber}
-                        </span>
-                        <span className="text-xs text-dim mt-1 block">قطر · خصوصي</span>
-                      </div>
-                    </div>
-
-                    <dl className="space-y-3 text-sm px-1">
-                      <div className="flex items-center justify-between gap-3">
-                        <dt className="text-muted">{t('qidLabel')}</dt>
-                        <dd className="text-ink tabular-nums">{currentEmployee?.qid || '—'}</dd>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <dt className="text-muted">{t('profileSubtitle')}</dt>
-                        <dd className="text-body truncate">
-                          {currentEmployee?.email || `moci.${(currentEmployee?.phone || '8901').slice(-4)}@moci.gov.qa`}
-                        </dd>
-                      </div>
-                    </dl>
+                    ) : (
+                      <p className="text-sm text-muted">{t('noVehicleYet')}</p>
+                    )}
                   </div>
-                )}
-              </div>
+                  {registeredVehicle && (
+                    <span className="text-[15px] font-semibold text-ink tabular-nums bg-fill px-3.5 py-1 rounded-full flex-shrink-0">
+                      {registeredVehicle.plateNumber}
+                    </span>
+                  )}
+                </section>
 
-              {/* Stats */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className={`${tile} p-5`}>
-                  <span className="text-sm text-muted block mb-1.5">{t('totalWashesDone')}</span>
-                  <span className="text-[21px] leading-none font-semibold text-ink tracking-tight">
-                    {completedOrders.length} {isRtl ? 'غسلة' : 'Washes'}
-                  </span>
-                </div>
-                <div className={`${tile} p-5`}>
-                  <span className="text-sm text-muted block mb-1.5">{t('lastWashDate')}</span>
-                  <span className="text-[17px] leading-tight font-semibold text-ink block">
-                    {lastOrder
-                      ? new Date(lastOrder.createdAt).toLocaleDateString(isRtl ? 'ar-QA' : 'en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                        })
-                      : t('noWashesYet')}
-                  </span>
-                </div>
-              </div>
-
-              {/* History */}
-              <div className={`${tile} p-6 space-y-4`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <Receipt className="h-5 w-5 text-body" />
-                    <h4 className="text-[15px] font-semibold text-ink">{t('recentWashesTitle')}</h4>
+                {/* Order history: one row that opens the history page */}
+                <Link
+                  href="/orders"
+                  className={`${tile} hover:bg-tile-hover p-6 flex items-center justify-between gap-4 transition-colors group`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Clock className="h-5 w-5 text-muted flex-shrink-0" />
+                    <span className="text-[15px] font-semibold text-ink truncate">{t('orderHistoryTitle')}</span>
                   </div>
-                  <span className="text-sm text-dim">
-                    {employeeOrders.length} {isRtl ? 'عمليات' : 'Records'}
-                  </span>
-                </div>
-
-                {employeeOrders.length > 0 ? (
-                  <ul className="space-y-2">
-                    {employeeOrders.slice(0, 5).map((order) => (
-                      <li key={order.id} className={`${inner} p-4 space-y-1.5`}>
-                        <div className="flex items-center justify-between gap-3 text-[14px]">
-                          <div className="flex items-center gap-2 tabular-nums min-w-0">
-                            <span className="text-ink font-semibold">{order.bayCodeSnapshot}</span>
-                            <span className="text-faint">·</span>
-                            <span className="text-body truncate">{order.vehicleSnapshot.plateNumber}</span>
-                          </div>
-                          <span className="text-xs text-body bg-fill px-2.5 py-1 rounded-full whitespace-nowrap">
-                            {order.status}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-sm text-dim gap-3">
-                          <span className="tabular-nums">{order.reference}</span>
-                          <span>
-                            {new Date(order.createdAt).toLocaleDateString(isRtl ? 'ar-QA' : 'en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </span>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className={`${inner} p-5 text-center text-sm text-muted`}>{t('noWashesYet')}</div>
-                )}
-              </div>
-
-              {/* Concierge */}
-              <div className={`${tile} p-6 space-y-4`}>
-                <div className="flex items-center gap-3">
-                  <MessageSquare className="h-5 w-5 text-body flex-shrink-0" />
-                  <div>
-                    <h4 className="text-[15px] font-semibold text-ink">{t('conciergeTitle')}</h4>
-                    <span className="text-sm text-muted block mt-0.5">{t('conciergeDesc')}</span>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    {employeeOrders.length > 0 && <span className="text-sm text-dim tabular-nums">{employeeOrders.length}</span>}
+                    <ChevronFwd className="h-5 w-5 text-dim group-hover:text-ink transition-colors" />
                   </div>
-                </div>
+                </Link>
 
+                {/* Support and sign out */}
                 <div className="grid grid-cols-2 gap-3">
                   <a
                     href="https://wa.me/97455128901?text=Hello%20TripleA%20Concierge"
@@ -1513,16 +1288,16 @@ function BayOrderingClientScreen() {
                     <span>{t('callConcierge')}</span>
                   </a>
                 </div>
-              </div>
 
-              <button
-                onClick={handleSignOut}
-                className="w-full py-3 rounded-full bg-fill-soft hover:bg-fill text-muted hover:text-ink text-[14px] flex items-center justify-center gap-2"
-              >
-                <LogOut className="h-4 w-4" />
-                <span>{t('switchAccountBtn')}</span>
-              </button>
-            </div>
+                <button
+                  onClick={handleSignOut}
+                  className="w-full py-3 rounded-full text-muted hover:text-ink text-sm flex items-center justify-center gap-2"
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>{t('switchAccountBtn')}</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

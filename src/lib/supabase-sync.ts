@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabase, hasServiceKey } from './supabase-server';
 import { MockDatabase, TOTAL_BAYS } from '../data/mock/seed';
 import { isValidStaffTransition } from '../domain/status-machine';
+import { validateInspection, requiresPreWashInspection } from '../domain/inspection';
 import {
   Employee,
   Vehicle,
@@ -17,9 +18,13 @@ import {
   OrderStatus,
   Issue,
   AuditLog,
+  Inspection,
+  InspectionMedia,
+  InspectionDamage,
 } from '../domain/types';
 
 const PHOTO_BUCKET = 'order-photos';
+const INSPECTION_BUCKET = 'inspections';
 
 type Row = Record<string, unknown>;
 
@@ -83,10 +88,21 @@ export async function createEmployee(employee: Employee): Promise<{ ok: boolean;
   return error ? { ok: false, error: error.message } : { ok: true };
 }
 
+let inspectionSchema: { ready: boolean; checkedAt: number } = { ready: false, checkedAt: 0 };
+
+/** The inspections table exists only after migration_v3_inspection.sql. */
+export async function isInspectionReady(sb: SupabaseClient): Promise<boolean> {
+  const now = Date.now();
+  if (now - inspectionSchema.checkedAt < 30_000) return inspectionSchema.ready;
+  const probe = await sb.from('inspections').select('id').limit(1);
+  inspectionSchema = { ready: !probe.error, checkedAt: now };
+  return inspectionSchema.ready;
+}
+
 // -----------------------------------------------------------------------------
 // READ: the whole operational state, assembled from the tables
 // -----------------------------------------------------------------------------
-export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version: number } | null> {
+export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version: number; inspectionEnabled: boolean } | null> {
   const sb = getServerSupabase();
   if (!sb) return null;
 
@@ -105,6 +121,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       eventsRes,
       issuesRes,
       auditRes,
+      inspectionRes,
     ] = await Promise.all([
       sb.from('employees').select('*').order('created_at', { ascending: false }),
       sb.from('vehicles').select('*'),
@@ -119,7 +136,10 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       sb.from('order_events').select('*').order('created_at', { ascending: true }),
       sb.from('issues').select('*').order('created_at', { ascending: false }),
       sb.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(300),
+      sb.from('inspections').select('*').order('started_at', { ascending: true }),
     ]);
+    const inspectionEnabled = !inspectionRes.error;
+    inspectionSchema = { ready: inspectionEnabled, checkedAt: Date.now() };
 
     if (empsRes.error) {
       console.warn('Supabase fetch error:', empsRes.error.message);
@@ -298,6 +318,50 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       createdAt: String(a.created_at || new Date().toISOString()),
     }));
 
+    // Inspections: media and damage photos are private files, so each gets a short-lived signed link
+    const inspectionRows = (inspectionRes.data || []) as Row[];
+    const inspectionPaths = new Set<string>();
+    for (const r of inspectionRows) {
+      for (const m of (r.media as Row[]) || []) if (m.path) inspectionPaths.add(String(m.path));
+      for (const d of (r.damages as Row[]) || []) if (d.photoPath) inspectionPaths.add(String(d.photoPath));
+    }
+    const inspectionLinks = new Map<string, string>();
+    if (inspectionPaths.size > 0) {
+      const { data: links } = await sb.storage.from(INSPECTION_BUCKET).createSignedUrls(Array.from(inspectionPaths), 3600);
+      for (const l of links || []) if (l.path && l.signedUrl) inspectionLinks.set(l.path, l.signedUrl);
+    }
+    const inspections: Inspection[] = inspectionRows.map((r) => ({
+      id: String(r.id),
+      orderId: String(r.order_id),
+      phase: (r.phase === 'AFTER' ? 'AFTER' : 'BEFORE') as Inspection['phase'],
+      status: (['SUBMITTED', 'SKIPPED'].includes(String(r.status)) ? String(r.status) : 'DRAFT') as Inspection['status'],
+      noDamage: Boolean(r.no_damage),
+      notes: r.notes ? String(r.notes) : undefined,
+      media: ((r.media as Row[]) || []).map((m) => ({
+        id: String(m.id),
+        kind: (m.kind === 'VIDEO' ? 'VIDEO' : 'PHOTO') as InspectionMedia['kind'],
+        angle: m.angle ? (String(m.angle) as InspectionMedia['angle']) : undefined,
+        path: m.path ? String(m.path) : undefined,
+        url: m.path ? inspectionLinks.get(String(m.path)) || '' : '',
+        createdAt: String(m.createdAt || new Date().toISOString()),
+      })),
+      damages: ((r.damages as Row[]) || []).map((d) => ({
+        id: String(d.id),
+        x: Number(d.x || 0),
+        y: Number(d.y || 0),
+        type: (d.type || 'OTHER') as InspectionDamage['type'],
+        severity: (d.severity || 'LOW') as InspectionDamage['severity'],
+        note: d.note ? String(d.note) : undefined,
+        photoPath: d.photoPath ? String(d.photoPath) : undefined,
+        photoUrl: d.photoPath ? inspectionLinks.get(String(d.photoPath)) || '' : undefined,
+        isNew: Boolean(d.isNew),
+      })),
+      inspectedBy: String(r.inspected_by || ''),
+      startedAt: String(r.started_at || new Date().toISOString()),
+      submittedAt: r.submitted_at ? String(r.submitted_at) : undefined,
+      bypassReason: r.bypass_reason ? String(r.bypass_reason) : undefined,
+    }));
+
     // Bays are plain numbers 1 to 1288; the app creates them on demand, so they are not sent
     const bays: MockDatabase['bays'] = [];
     const qrTokens: MockDatabase['qrTokens'] = [];
@@ -350,6 +414,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       orderEvents,
       issues,
       auditLogs,
+      inspections,
       settings: {
         referencePrefix: 'CB',
         timezone: 'Asia/Qatar',
@@ -367,7 +432,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       },
     };
 
-    return { db, version: Date.now() };
+    return { db, version: Date.now(), inspectionEnabled };
   } catch (err) {
     console.error('fetchSupabaseState error:', err);
     return null;
@@ -387,6 +452,7 @@ export interface SyncChanges {
   orderEvents?: OrderEvent[];
   issues?: Issue[];
   auditLogs?: AuditLog[];
+  inspections?: Inspection[];
 }
 
 export interface ApplyResult {
@@ -448,6 +514,152 @@ async function uploadPhoto(sb: SupabaseClient, photo: OrderPhoto): Promise<strin
  * - only an admin can move an order through its stages, adjust credits, or cancel a pass
  * Every admin stage change must follow the status rules.
  */
+async function ensureInspectionBucket(sb: SupabaseClient): Promise<boolean> {
+  if (!hasServiceKey()) return false;
+  const { error } = await sb.storage.createBucket(INSPECTION_BUCKET, { public: false, fileSizeLimit: 262144000 });
+  return !error || /already exists/i.test(error.message);
+}
+
+/** The browser uploads straight to private storage with this one-time link, so large videos never pass through the API. */
+export async function createInspectionUpload(
+  orderId: string,
+  mediaId: string,
+  ext: string
+): Promise<{ path: string; token: string; signedUrl: string } | null> {
+  const sb = getServerSupabase();
+  if (!sb || !(await ensureInspectionBucket(sb))) return null;
+  const path = `${orderId}/${mediaId}.${ext}`;
+  const { data, error } = await sb.storage.from(INSPECTION_BUCKET).createSignedUploadUrl(path);
+  if (error || !data) return null;
+  return { path, token: data.token, signedUrl: data.signedUrl };
+}
+
+async function uploadInspectionDataUrl(sb: SupabaseClient, orderId: string, id: string, dataUrl: string): Promise<string | null> {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl);
+  if (!match || !(await ensureInspectionBucket(sb))) return null;
+  const path = `${orderId}/${id}.${match[1].split('/')[1].replace('jpeg', 'jpg')}`;
+  const { error } = await sb.storage
+    .from(INSPECTION_BUCKET)
+    .upload(path, Buffer.from(match[2], 'base64'), { contentType: match[1], upsert: true });
+  return error ? null : path;
+}
+
+/** Saves the inspections. Staff only. A sent inspection is locked for good. */
+async function writeInspections(
+  sb: SupabaseClient,
+  inspections: Inspection[],
+  result: ApplyResult
+): Promise<{ error?: string }> {
+  if (!(await isInspectionReady(sb))) {
+    return { error: 'Run migration_v3_inspection.sql in Supabase to save inspections' };
+  }
+
+  const ids = Array.from(new Set(inspections.map((i) => i.orderId)));
+  const { data: orderRows } = await sb.from('orders').select('id').in('id', ids);
+  const knownOrders = new Set((orderRows || []).map((r: Row) => String(r.id)));
+  const { data: existingRows } = await sb.from('inspections').select('id,order_id,phase,status').in('order_id', ids);
+  const existing = (existingRows || []) as Row[];
+
+  const rows: Row[] = [];
+  for (const i of inspections) {
+    const label = `inspection ${i.orderId}`;
+    if (!knownOrders.has(i.orderId)) {
+      result.rejected.push(`${label}: order not found`);
+      continue;
+    }
+    const same = existing.find((e) => String(e.order_id) === i.orderId && String(e.phase) === i.phase);
+    if (same && String(same.id) !== i.id) {
+      result.rejected.push(`${label}: this order already has a ${i.phase.toLowerCase()} inspection`);
+      continue;
+    }
+    if (same && ['SUBMITTED', 'SKIPPED'].includes(String(same.status))) {
+      result.rejected.push(`${label}: it was already sent and is locked`);
+      continue;
+    }
+    if (i.status === 'SKIPPED' && (i.phase !== 'BEFORE' || (i.bypassReason || '').trim().length < 3)) {
+      result.rejected.push(`${label}: skipping needs a written reason`);
+      continue;
+    }
+    if (i.status === 'SUBMITTED') {
+      const problem = validateInspection(i);
+      if (problem) {
+        result.rejected.push(`${label}: ${problem}`);
+        continue;
+      }
+    }
+
+    // Files: keep the private path; a data link (local mode) is uploaded first
+    let bad = false;
+    const media: Row[] = [];
+    for (const m of i.media) {
+      let path = m.path;
+      if (path && !path.startsWith(`${i.orderId}/`)) bad = true;
+      if (!path && m.url.startsWith('data:')) {
+        path = (await uploadInspectionDataUrl(sb, i.orderId, m.id, m.url)) || undefined;
+        if (path) result.photoUrls[m.id] = (await sb.storage.from(INSPECTION_BUCKET).createSignedUrl(path, 3600)).data?.signedUrl || '';
+      }
+      if (!path) bad = true;
+      media.push({ id: m.id, kind: m.kind, angle: m.angle || null, path, createdAt: m.createdAt });
+    }
+    const damages: Row[] = [];
+    for (const d of i.damages) {
+      let photoPath = d.photoPath;
+      if (photoPath && !photoPath.startsWith(`${i.orderId}/`)) bad = true;
+      if (!photoPath && d.photoUrl && d.photoUrl.startsWith('data:')) {
+        photoPath = (await uploadInspectionDataUrl(sb, i.orderId, `dmg-${d.id}`, d.photoUrl)) || undefined;
+        if (photoPath) result.photoUrls[`dmg:${d.id}`] = (await sb.storage.from(INSPECTION_BUCKET).createSignedUrl(photoPath, 3600)).data?.signedUrl || '';
+      }
+      damages.push({
+        id: d.id,
+        x: Math.min(100, Math.max(0, Number(d.x) || 0)),
+        y: Math.min(100, Math.max(0, Number(d.y) || 0)),
+        type: d.type,
+        severity: d.severity,
+        note: (d.note || '').slice(0, 500) || null,
+        photoPath: photoPath || null,
+        isNew: !!d.isNew,
+      });
+    }
+    if (bad) {
+      result.rejected.push(`${label}: a photo or video is missing or points to another order`);
+      continue;
+    }
+
+    rows.push({
+      id: i.id,
+      order_id: i.orderId,
+      phase: i.phase,
+      status: i.status,
+      no_damage: !!i.noDamage,
+      notes: (i.notes || '').slice(0, 1000) || null,
+      media,
+      damages,
+      inspected_by: i.inspectedBy,
+      started_at: i.startedAt,
+      submitted_at: i.status === 'DRAFT' ? null : i.submittedAt || new Date().toISOString(),
+      bypass_reason: i.status === 'SKIPPED' ? (i.bypassReason || '').trim().slice(0, 300) : null,
+    });
+  }
+
+  if (rows.length > 0) {
+    const { error } = await sb.from('inspections').upsert(rows, { onConflict: 'id' });
+    if (error) return { error: `inspections: ${error.message}` };
+  }
+  return {};
+}
+
+/** True when the order has an inspection that was sent (or skipped with a reason) before the wash. */
+async function hasPreWashClearance(sb: SupabaseClient, orderId: string): Promise<boolean> {
+  const { data } = await sb
+    .from('inspections')
+    .select('id')
+    .eq('order_id', orderId)
+    .eq('phase', 'BEFORE')
+    .in('status', ['SUBMITTED', 'SKIPPED'])
+    .limit(1);
+  return !!data && data.length > 0;
+}
+
 export interface Identity {
   admin: boolean;
   employeeId?: string;
@@ -469,6 +681,12 @@ export async function applyChanges(input: SyncChanges, identity: Identity): Prom
       const checked = await validateEmployeeBatch(sb, input, identity.employeeId);
       if (checked.errors.length > 0) return { ...result, rejected: checked.errors };
       changes = checked.fixed;
+    }
+
+    // ---- inspections (staff only; the customer path is refused in validateEmployeeBatch) ----
+    if (isAdmin && changes.inspections?.length) {
+      const written = await writeInspections(sb, changes.inspections, result);
+      if (written.error) return { ...result, ok: false, error: written.error };
     }
 
     // ---- employees and vehicles: profile data, open to the customer flow ----
@@ -540,6 +758,13 @@ export async function applyChanges(input: SyncChanges, identity: Identity): Prom
           if (isAdmin && !isValidStaffTransition(from, order.status, statusBefore)) {
             result.rejected.push(`${order.reference}: ${from} -> ${order.status} is not allowed`);
             continue;
+          }
+          // The wash cannot start until the car has been inspected (or a supervisor skipped it with a reason)
+          if (isAdmin && requiresPreWashInspection(from, order.status) && (await isInspectionReady(sb))) {
+            if (!(await hasPreWashClearance(sb, order.id))) {
+              result.rejected.push(`${order.reference}: inspect the car before starting the wash`);
+              continue;
+            }
           }
         } else if (!isAdmin) {
           // Same status from a non-admin: nothing to save for this order
@@ -913,6 +1138,8 @@ async function validateEmployeeBatch(
     if (a.actor.id !== me) errors.push('audit: not yours');
   }
   if ((changes.issues || []).length > 0) errors.push('issues: only staff can report issues');
+  if ((changes.inspections || []).length > 0) errors.push('inspections: only staff can save inspections');
+  fixed.inspections = [];
   fixed.issues = [];
 
   return { errors: Array.from(new Set(errors)), fixed };
@@ -944,6 +1171,7 @@ export function scopeState(db: MockDatabase, identity: Identity): MockDatabase {
     orderEvents: [],
     issues: [],
     auditLogs: [],
+    inspections: [],
   };
   if (!me) return catalogue;
 
@@ -958,5 +1186,8 @@ export function scopeState(db: MockDatabase, identity: Identity): MockDatabase {
     orders: mine,
     photos: db.photos.filter((x) => mineIds.has(x.orderId)),
     orderEvents: db.orderEvents.filter((x) => mineIds.has(x.orderId)),
+    inspections: db.inspections
+      .filter((x) => mineIds.has(x.orderId) && x.status === 'SUBMITTED')
+      .map((x) => ({ ...x, inspectedBy: 'TripleA Team', bypassReason: undefined })),
   };
 }

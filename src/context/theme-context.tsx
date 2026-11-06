@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { Suspense, createContext, useContext, useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
 export type Theme = 'dark' | 'light';
@@ -37,8 +37,18 @@ function applyTheme(next: Theme) {
   });
 }
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
+/** Reports the current route to the provider. It lives inside Suspense because usePathname needs it. */
+function RouteSync({ onRoute }: { onRoute: (pathname: string) => void }) {
   const pathname = usePathname();
+  useEffect(() => onRoute(pathname), [pathname, onRoute]);
+  return null;
+}
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  // The route is fed in by <RouteSync> below (reading it here would block prerendering)
+  const [pathname, setPathname] = useState<string | null>(
+    typeof window !== 'undefined' ? window.location.pathname : null
+  );
   // Dark is the default; the admin's saved choice is restored on the dashboard.
   const [theme, setThemeState] = useState<Theme>(() =>
     typeof window !== 'undefined' && isThemedRoute(window.location.pathname) ? readSavedTheme() : 'dark'
@@ -68,7 +78,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
-  return <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>{children}</ThemeContext.Provider>;
+  return (
+    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
+      <Suspense fallback={null}>
+        <RouteSync onRoute={setPathname} />
+      </Suspense>
+      {children}
+    </ThemeContext.Provider>
+  );
 }
 
 export function useTheme() {

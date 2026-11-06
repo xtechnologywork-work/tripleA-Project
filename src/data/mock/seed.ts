@@ -15,6 +15,7 @@ import {
   OrderPhoto,
   OrderEvent,
   Issue,
+  Inspection,
   AuditLog,
   SystemSettings,
 } from '../../domain/types';
@@ -38,6 +39,7 @@ export interface MockDatabase {
   orderEvents: OrderEvent[];
   issues: Issue[];
   auditLogs: AuditLog[];
+  inspections: Inspection[];
   settings: SystemSettings;
 }
 
@@ -407,6 +409,7 @@ export function createInitialSeed(): MockDatabase {
     photos: [],
     orderEvents,
     issues: [],
+    inspections: [],
     auditLogs,
     settings,
   };

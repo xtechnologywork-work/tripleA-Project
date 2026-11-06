@@ -14,7 +14,7 @@ BEGIN
     FOREACH t IN ARRAY ARRAY[
         'employees','vehicles','services','subscription_packages','employee_subscriptions',
         'credit_ledger','parking_zones','parking_bays','orders','order_photos','order_events',
-        'field_team_members','app_sync_state','issues','audit_logs'
+        'field_team_members','app_sync_state','issues','audit_logs','inspections'
     ]
     LOOP
         IF to_regclass('public.' || t) IS NULL THEN CONTINUE; END IF;

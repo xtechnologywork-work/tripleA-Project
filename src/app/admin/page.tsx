@@ -6,6 +6,9 @@ import { useRouter } from 'next/navigation';
 import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { getSupabase } from '@/lib/supabase';
+import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
+import { InspectionFlow } from '@/components/inspection/inspection-flow';
+import { isCleared, requiresPreWashInspection } from '@/domain/inspection';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { useAuth } from '@/context/auth-context';
 import {
@@ -82,12 +85,15 @@ export default function AdminDashboardPage() {
   const [historyModalClient, setHistoryModalClient] = useState<Employee | null>(null);
   const [bayLookup, setBayLookup] = useState('');
   const [dispatchView, setDispatchView] = useState<'LIST' | 'BOARD'>('LIST');
+  const [clock, setClock] = useState<number | null>(null);
+  const [inspectionFlow, setInspectionFlow] = useState<'BEFORE' | 'AFTER' | null>(null);
+  const [inspectionViewOpen, setInspectionViewOpen] = useState(false);
   const [clientPanelId, setClientPanelId] = useState<string | null>(null);
   const [dragOrderId, setDragOrderId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
   // In-app dialogs (replace the browser's confirm / prompt boxes)
-  type AdminDialog = { kind: 'cancel' | 'qc' | 'issue' | 'cancelSub'; subId?: string } | null;
+  type AdminDialog = { kind: 'cancel' | 'qc' | 'issue' | 'cancelSub' | 'skipInspection'; subId?: string } | null;
   const [dialog, setDialog] = useState<AdminDialog>(null);
   const [dialogText, setDialogText] = useState('');
 
@@ -143,6 +149,14 @@ export default function AdminDashboardPage() {
       clearInterval(interval);
     };
   }, [reloadData]);
+
+  // The current time, set after the page loads and refreshed every minute (for the daily numbers)
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- time is only known in the browser
+    setClock(Date.now());
+    const timer = setInterval(() => setClock(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // ---- Sign-in: only admins open the dashboard (when Supabase is configured) ----
   const router = useRouter();
@@ -343,24 +357,21 @@ export default function AdminDashboardPage() {
     if (!target) return;
     try {
       const payload: Parameters<typeof mockStore.transitionOrder>[2] = {};
-      const activeAssignee = customAssigneeId || assigneeId;
-      const mem = fieldMembers.find((m) => m.id === activeAssignee) || fieldMembers[0];
-
       if (toStatus === 'ASSIGNED') {
         payload.assignment = {
-          type: 'MEMBER',
-          memberId: mem?.id || 'ft_01',
-          assignedName: mem?.displayName || 'Tariq Mansour',
-          assignedBy: 'Tower Operations Lead',
+          type: 'TEAM',
+          teamId: 'team-triplea',
+          assignedName: 'TripleA Team',
+          assignedBy: adminEmail || 'Tower Operations Lead',
           assignedAt: new Date().toISOString(),
         };
       } else if (toStatus === 'IN_PROGRESS') {
         if (!target.assignment) {
           payload.assignment = {
-            type: 'MEMBER',
-            memberId: mem?.id || 'ft_01',
-            assignedName: mem?.displayName || 'Tariq Mansour',
-            assignedBy: 'Tower Operations Lead',
+            type: 'TEAM',
+            teamId: 'team-triplea',
+            assignedName: 'TripleA Team',
+            assignedBy: adminEmail || 'Tower Operations Lead',
             assignedAt: new Date().toISOString(),
           };
         }
@@ -624,12 +635,15 @@ export default function AdminDashboardPage() {
   };
 
   // ---- Analytics: the last 7 days and the order mix ----
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - (6 - i));
-    return d;
-  }).map((day) => {
+  const last7Days = (clock === null
+    ? []
+    : Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(clock);
+        d.setHours(0, 0, 0, 0);
+        d.setDate(d.getDate() - (6 - i));
+        return d;
+      })
+  ).map((day) => {
     const next = new Date(day);
     next.setDate(next.getDate() + 1);
     const dayOrders = orders.filter((o) => {
@@ -658,10 +672,18 @@ export default function AdminDashboardPage() {
   const confirmDialog = () => {
     if (!dialog) return;
     const text = dialogText.trim();
-    if (dialog.kind === 'issue' && !text) return;
+    if ((dialog.kind === 'issue' || dialog.kind === 'skipInspection') && !text) return;
     if (dialog.kind === 'cancel') handleTransition('CANCELLED', undefined, text || undefined);
     if (dialog.kind === 'qc') handleTransition('COMPLETED', undefined, text || undefined);
     if (dialog.kind === 'issue') handleTransition('ISSUE_REPORTED', undefined, text);
+    if (dialog.kind === 'skipInspection' && selectedOrder) {
+      try {
+        mockStore.skipInspection(selectedOrder.id, text, staffActor);
+        showToast('Inspection skipped. Start Wash is unlocked.');
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Could not skip the inspection');
+      }
+    }
     if (dialog.kind === 'cancelSub' && dialog.subId) {
       mockStore.cancelSubscription(dialog.subId);
       showToast('Subscription cancelled');
@@ -693,6 +715,14 @@ export default function AdminDashboardPage() {
       label: 'What happened?',
       placeholder: 'e.g. Bay obstructed, vehicle locked',
       confirm: 'Report issue',
+      tone: 'warning',
+    },
+    skipInspection: {
+      title: 'Skip the inspection?',
+      body: 'Only for an emergency, like a broken camera or no connection. Your name and the reason are saved on the order.',
+      label: 'Reason (required)',
+      placeholder: 'e.g. Phone camera is broken',
+      confirm: 'Skip and unlock',
       tone: 'warning',
     },
     cancelSub: {
@@ -749,6 +779,24 @@ export default function AdminDashboardPage() {
   const qcPassRate = qcChecked.length
     ? Math.round((qcChecked.filter((o) => o.qualityCheck!.passed).length / qcChecked.length) * 100)
     : null;
+
+  const staffActor: ActorContext = {
+    type: 'STAFF',
+    id: 'usr_ops_lead',
+    name: adminEmail || 'TripleA Team',
+    email: adminEmail || 'ops@triplea.qa',
+    role: 'SUPERADMIN',
+  };
+
+  // Inspection of the selected order: Start Wash stays locked until it was sent (or skipped with a reason)
+  const inspectionEnabled = mockStore.isInspectionEnabled();
+  const selectedBefore = selectedOrder ? mockStore.getInspection(selectedOrder.id, 'BEFORE') : undefined;
+  const selectedAfter = selectedOrder ? mockStore.getInspection(selectedOrder.id, 'AFTER') : undefined;
+  const washLocked =
+    !!selectedOrder &&
+    inspectionEnabled &&
+    requiresPreWashInspection(selectedOrder.status, 'IN_PROGRESS') &&
+    !isCleared(selectedBefore);
 
   // Staff can only take a valid next step; everything else is disabled
   const canGo = (to: OrderStatus) =>
@@ -1139,6 +1187,17 @@ export default function AdminDashboardPage() {
                       )}
                     </div>
 
+                    {/* Pre-wash inspection: comes first, and opens Start Wash */}
+                    <InspectionCard
+                      order={selectedOrder}
+                      before={selectedBefore}
+                      after={selectedAfter}
+                      enabled={inspectionEnabled}
+                      onStart={(phase) => setInspectionFlow(phase)}
+                      onSkip={() => setDialog({ kind: 'skipInspection' })}
+                      onView={() => setInspectionViewOpen(true)}
+                    />
+
                     {/* Progression */}
                     <div className={`${card} p-6 space-y-5`}>
                       <div className="flex flex-col 2xl:flex-row 2xl:items-center justify-between gap-2">
@@ -1194,26 +1253,15 @@ export default function AdminDashboardPage() {
                               ) : null}
                             </div>
                             <div className="text-[14px] font-semibold text-ink">Assigned (تم التعيين)</div>
-                            <select
-                              value={assigneeId}
-                              onChange={(e) => setAssigneeId(e.target.value)}
-                              aria-label="Field specialist"
-                              className="w-full bg-raised rounded-xl px-3 py-2 text-sm text-ink outline-none"
-                            >
-                              {fieldMembers.map((m) => (
-                                <option key={m.id} value={m.id}>
-                                  {m.displayName}
-                                </option>
-                              ))}
-                            </select>
+                            <div className="w-full bg-raised rounded-xl px-3 py-2 text-sm text-ink">TripleA Team</div>
                           </div>
                           <button
-                            onClick={() => handleTransition('ASSIGNED', assigneeId)}
-                            disabled={!canGo('ASSIGNED')}
+                            onClick={() => handleTransition('ASSIGNED')}
+                            disabled={!canGo('ASSIGNED') || selectedOrder.status === 'ASSIGNED'}
                             className={`${stagePrimary} bg-[#0071e3] hover:bg-[#0077ed] text-white`}
                           >
                             <User className="h-4 w-4" />
-                            <span>{selectedOrder.status === 'ASSIGNED' ? 'Reassign Tech' : 'Dispatch Tech'}</span>
+                            <span>{selectedOrder.status === 'ASSIGNED' ? 'Team assigned' : 'Assign team'}</span>
                           </button>
                         </div>
 
@@ -1231,7 +1279,7 @@ export default function AdminDashboardPage() {
                           </div>
                           <button
                             onClick={() => handleTransition('IN_PROGRESS')}
-                            disabled={!canGo('IN_PROGRESS')}
+                            disabled={!canGo('IN_PROGRESS') || washLocked}
                             className={`${stagePrimary} ${
                               selectedOrder.status === 'IN_PROGRESS'
                                 ? 'bg-amber-400/15 text-amber-300 hover:bg-amber-400/25'
@@ -1239,7 +1287,7 @@ export default function AdminDashboardPage() {
                             }`}
                           >
                             <Sparkles className="h-4 w-4" />
-                            <span>{selectedOrder.status === 'IN_PROGRESS' ? 'Detailing Active' : 'Start Wash'}</span>
+                            <span>{selectedOrder.status === 'IN_PROGRESS' ? 'Detailing Active' : washLocked ? 'Inspect the car first' : 'Start Wash'}</span>
                           </button>
                         </div>
 
@@ -1391,7 +1439,7 @@ export default function AdminDashboardPage() {
                         {/* Specialist */}
                         <div className={`${card} p-5 space-y-3`}>
                           <div className="flex items-center justify-between">
-                            <h3 className="text-base font-semibold text-ink">Allocated Specialist</h3>
+                            <h3 className="text-base font-semibold text-ink">Assigned team</h3>
                             {selectedOrder.assignment ? (
                               <span className="text-xs text-link-soft font-semibold">Active On Order</span>
                             ) : (
@@ -1409,7 +1457,7 @@ export default function AdminDashboardPage() {
                                   <div className="text-[14px] font-semibold text-ink truncate">
                                     {selectedOrder.assignment.assignedName || 'Field Specialist'}
                                   </div>
-                                  <span className="text-xs text-dim">Senior Detailing Specialist</span>
+                                  <span className="text-xs text-dim">Operations team</span>
                                 </div>
                               </div>
 
@@ -1424,7 +1472,7 @@ export default function AdminDashboardPage() {
                               </a>
                             </div>
                           ) : (
-                            <p className="text-sm text-dim">Use Stage 2 above to allocate a tower specialist.</p>
+                            <p className="text-sm text-dim">Use Stage 2 above to assign the TripleA Team.</p>
                           )}
                         </div>
 
@@ -1974,25 +2022,17 @@ export default function AdminDashboardPage() {
                 </div>
 
                 <div className={`${card} p-6 space-y-4`}>
-                  <h3 className="text-base font-semibold text-ink">Field Technicians on Active Duty</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                    {fieldMembers.map((m) => {
-                      const assignedCount = orders.filter(
-                        (o) => o.assignment?.memberId === m.id && o.status !== 'RETURNED_TO_PARKING'
-                      ).length;
-
-                      return (
-                        <div key={m.id} className="p-4 rounded-2xl bg-inset flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-9 h-9 rounded-full bg-raised flex items-center justify-center font-semibold text-sm text-ink flex-shrink-0">
-                              {m.displayName.charAt(0)}
-                            </div>
-                            <span className="font-medium text-ink truncate">{m.displayName}</span>
-                          </div>
-                          <span className="text-sm tabular-nums text-muted whitespace-nowrap">{assignedCount} active orders</span>
-                        </div>
-                      );
-                    })}
+                  <h3 className="text-base font-semibold text-ink">TripleA Team</h3>
+                  <div className="p-4 rounded-2xl bg-inset flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-full bg-raised flex items-center justify-center font-semibold text-sm text-ink flex-shrink-0">
+                        T
+                      </div>
+                      <span className="font-medium text-ink truncate">TripleA Team</span>
+                    </div>
+                    <span className="text-sm tabular-nums text-muted whitespace-nowrap">
+                      {orders.filter((o) => o.assignment && o.status !== 'RETURNED_TO_PARKING' && o.status !== 'CANCELLED').length} active orders
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2147,7 +2187,7 @@ export default function AdminDashboardPage() {
             <div className="flex items-center gap-2 pt-1">
               <button
                 onClick={confirmDialog}
-                disabled={dialog.kind === 'issue' && !dialogText.trim()}
+                disabled={(dialog.kind === 'issue' || dialog.kind === 'skipInspection') && !dialogText.trim()}
                 className={`flex-1 py-3 rounded-full text-sm font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed ${
                   dialogConfig[dialog.kind].tone === 'danger'
                     ? 'bg-rose-500 hover:bg-rose-400 text-white'
@@ -2249,6 +2289,27 @@ export default function AdminDashboardPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {inspectionFlow && selectedOrder && (
+        <InspectionFlow
+          key={`${selectedOrder.id}-${inspectionFlow}`}
+          order={selectedOrder}
+          phase={inspectionFlow}
+          actor={staffActor}
+          onClose={() => setInspectionFlow(null)}
+          onDone={(message) => showToast(message)}
+        />
+      )}
+
+      {inspectionViewOpen && selectedOrder && selectedBefore && (
+        <InspectionViewer
+          title={`Inspection · ${selectedOrder.reference}`}
+          before={selectedBefore}
+          after={selectedAfter?.status === 'SUBMITTED' ? selectedAfter : undefined}
+          onOpenImage={(url) => setLightboxPhoto(url)}
+          onClose={() => setInspectionViewOpen(false)}
+        />
       )}
 
       {lightboxPhoto && (

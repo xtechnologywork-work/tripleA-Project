@@ -47,3 +47,4 @@ next-env.d.ts
 *.tsbuildinfo
 eslint.json
 /.next-local/
+/.next-*/

@@ -39,6 +39,7 @@ export async function GET(req: Request) {
             db: scopeState(remote.db, identity),
             version: remote.version,
             source: 'supabase',
+            features: { inspection: remote.inspectionEnabled },
             role: identity.admin ? 'admin' : identity.employeeId ? 'employee' : 'public',
             timestamp: Date.now(),
           },

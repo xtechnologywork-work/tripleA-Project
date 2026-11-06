@@ -15,7 +15,10 @@ import {
   FieldTeamMember,
   Vehicle,
   Issue,
+  Inspection,
+  InspectionPhase,
 } from '../../domain/types';
+import { validateInspection, requiresPreWashInspection, isCleared } from '../../domain/inspection';
 import { ActorContext, hasPermission, getAllowedTransitions, isValidStaffTransition } from '../../domain/status-machine';
 
 const STORAGE_KEY = 'cb_supabase_live_v2';
@@ -37,7 +40,8 @@ type TrackedCollection =
   | 'photos'
   | 'orderEvents'
   | 'issues'
-  | 'auditLogs';
+  | 'auditLogs'
+  | 'inspections';
 
 const TRACKED: TrackedCollection[] = [
   'employees',
@@ -49,6 +53,7 @@ const TRACKED: TrackedCollection[] = [
   'orderEvents',
   'issues',
   'auditLogs',
+  'inspections',
 ];
 
 type Changes = Partial<Record<TrackedCollection, Array<{ id: string }>>>;
@@ -69,6 +74,7 @@ class MockStore {
   private pushAgain = false;
   private lastServerJson = '';
   private employeeToken: string | null = null;
+  private inspectionEnabled = true; // false until migration_v3_inspection.sql has been run in Supabase
   private authToken: string | null = null;
   private issueListeners: Array<(messages: string[]) => void> = [];
 
@@ -123,6 +129,11 @@ class MockStore {
   /** The admin dashboard passes its Supabase access token so the server can trust its changes. */
   public setAuthToken(token: string | null): void {
     this.authToken = token;
+  }
+
+  /** False when the Supabase inspections table does not exist yet: the dashboard then shows a setup message. */
+  public isInspectionEnabled(): boolean {
+    return this.inspectionEnabled;
   }
 
   public getEmployeeToken(): string | null {
@@ -267,13 +278,17 @@ class MockStore {
         for (const photo of this.db.photos) {
           if (photoUrls[photo.id]) photo.blobKey = photoUrls[photo.id];
         }
+        for (const insp of this.db.inspections || []) {
+          for (const m of insp.media) if (photoUrls[m.id]) m.url = photoUrls[m.id];
+          for (const d of insp.damages) if (photoUrls[`dmg:${d.id}`]) d.photoUrl = photoUrls[`dmg:${d.id}`];
+        }
       }
 
       for (const [k, json] of sent) {
         const id = k.slice(k.indexOf(':') + 1);
         const collection = k.slice(0, k.indexOf(':')) as TrackedCollection;
         const row = this.db ? this.rowsOf(this.db, collection).find((r) => r.id === id) : undefined;
-        const changedBySave = !!(fixes[id] || photoUrls[id]);
+        const changedBySave = !!(fixes[id] || photoUrls[id] || (collection === 'inspections' && Object.keys(photoUrls).length > 0));
         this.synced.set(k, changedBySave && row ? JSON.stringify(row) : json);
       }
       this.failStreak = 0;
@@ -312,6 +327,7 @@ class MockStore {
       const res = await fetch(fresh ? '/api/sync?fresh=1' : '/api/sync', { cache: 'no-store', headers: this.authHeaders() });
       if (res.ok) {
         const data = await res.json();
+        if (data.features) this.inspectionEnabled = data.features.inspection !== false;
         if (data.db && (data.source === 'supabase' || !this.db || data.version !== this.lastServerVersion)) {
           // Re-check: a change may have been made while the request was in flight
           if (this.db && this.hasUnsyncedChanges()) return;
@@ -343,6 +359,7 @@ class MockStore {
     if (!this.db) {
       this.loadFromStorage();
     }
+    if (!this.db!.inspections) this.db!.inspections = [];
     return this.db!;
   }
 
@@ -583,6 +600,9 @@ class MockStore {
     if (isStaffOrAdmin && !isValidStaffTransition(order.status, toStatus, order.statusBeforeIssue)) {
       throw new Error(`An order that is ${order.status} cannot go to ${toStatus}`);
     }
+    if (isStaffOrAdmin && this.inspectionEnabled && requiresPreWashInspection(order.status, toStatus) && !this.isPreWashCleared(order.id)) {
+      throw new Error('Inspect the car before starting the wash');
+    }
 
     const now = new Date().toISOString();
     const previousStatus = order.status;
@@ -678,6 +698,119 @@ class MockStore {
     db.photos.push(photo);
     this.saveToStorage();
     return photo;
+  }
+
+  // --- Car inspection ---
+
+  public getInspection(orderId: string, phase: InspectionPhase): Inspection | undefined {
+    return this.getDb().inspections.find((i) => i.orderId === orderId && i.phase === phase);
+  }
+
+  /** True when the car was inspected (or a supervisor skipped it with a reason) before the wash. */
+  public isPreWashCleared(orderId: string): boolean {
+    return isCleared(this.getInspection(orderId, 'BEFORE'));
+  }
+
+  /** Opens the inspection for an order: the existing one, or a new empty draft. */
+  public startInspection(orderId: string, phase: InspectionPhase, actor: ActorContext): Inspection {
+    const existing = this.getInspection(orderId, phase);
+    if (existing) return existing;
+    const inspection: Inspection = {
+      id: uid('insp'),
+      orderId,
+      phase,
+      status: 'DRAFT',
+      noDamage: false,
+      media: [],
+      damages: [],
+      inspectedBy: actor.name || actor.email || actor.id,
+      startedAt: new Date().toISOString(),
+    };
+    this.getDb().inspections.push(inspection);
+    this.saveToStorage();
+    return inspection;
+  }
+
+  /** Saves a draft as it is being filled in. A sent inspection can never be changed. */
+  public saveInspection(next: Inspection): Inspection {
+    const db = this.getDb();
+    const index = db.inspections.findIndex((i) => i.id === next.id);
+    if (index === -1) throw new Error('Inspection not found');
+    if (db.inspections[index].status !== 'DRAFT') throw new Error('This inspection was already sent');
+    db.inspections[index] = { ...next, status: 'DRAFT' };
+    this.saveToStorage();
+    return db.inspections[index];
+  }
+
+  public submitInspection(orderId: string, phase: InspectionPhase, actor: ActorContext): Inspection {
+    const db = this.getDb();
+    const inspection = db.inspections.find((i) => i.orderId === orderId && i.phase === phase);
+    if (!inspection) throw new Error('Start the inspection first');
+    if (inspection.status !== 'DRAFT') throw new Error('This inspection was already sent');
+    const problem = validateInspection(inspection);
+    if (problem) throw new Error(problem);
+
+    const now = new Date().toISOString();
+    inspection.status = 'SUBMITTED';
+    inspection.submittedAt = now;
+
+    db.orderEvents.push({
+      id: uid('evt'),
+      orderId,
+      type: 'NOTE',
+      actor: { type: actor.type, id: actor.id, name: actor.name },
+      payload: { inspection: phase, photos: inspection.media.length, damages: inspection.damages.length },
+      createdAt: now,
+    });
+    db.auditLogs.unshift({
+      id: uid('aud'),
+      actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
+      action: `inspection.submit.${phase}`,
+      entityType: 'ORDER',
+      entityId: orderId,
+      details: { damages: inspection.damages.length, noDamage: inspection.noDamage },
+      createdAt: now,
+    });
+    this.saveToStorage();
+    return inspection;
+  }
+
+  /** Emergency only: a supervisor starts the wash without an inspection, and says why. */
+  public skipInspection(orderId: string, reason: string, actor: ActorContext): Inspection {
+    const cleanReason = reason.trim();
+    if (cleanReason.length < 3) throw new Error('Write a reason for skipping the inspection');
+    const db = this.getDb();
+    const existing = db.inspections.find((i) => i.orderId === orderId && i.phase === 'BEFORE');
+    if (existing && existing.status !== 'DRAFT') throw new Error('This order already has a sent inspection');
+
+    const now = new Date().toISOString();
+    const inspection: Inspection = existing || {
+      id: uid('insp'),
+      orderId,
+      phase: 'BEFORE',
+      status: 'DRAFT',
+      noDamage: false,
+      media: [],
+      damages: [],
+      inspectedBy: actor.name || actor.email || actor.id,
+      startedAt: now,
+    };
+    inspection.status = 'SKIPPED';
+    inspection.bypassReason = cleanReason;
+    inspection.submittedAt = now;
+    if (!existing) db.inspections.push(inspection);
+
+    db.auditLogs.unshift({
+      id: uid('aud'),
+      actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
+      action: 'inspection.skip',
+      entityType: 'ORDER',
+      entityId: orderId,
+      details: { reason: cleanReason },
+      createdAt: now,
+    });
+    this.saveToStorage();
+    return inspection;
   }
 
   public getOrderPhotos(orderId: string): OrderPhoto[] {

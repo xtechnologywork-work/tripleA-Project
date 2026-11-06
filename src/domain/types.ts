@@ -273,3 +273,61 @@ export interface SystemSettings {
     failureRate: number;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Car inspection (before and after the wash)
+// ---------------------------------------------------------------------------
+export type InspectionAngle =
+  | 'FRONT'
+  | 'FRONT_RIGHT'
+  | 'RIGHT'
+  | 'REAR_RIGHT'
+  | 'REAR'
+  | 'REAR_LEFT'
+  | 'LEFT'
+  | 'FRONT_LEFT';
+
+export type InspectionPhase = 'BEFORE' | 'AFTER';
+
+/** DRAFT: being filled in. SUBMITTED: locked. SKIPPED: a supervisor started the wash without one, with a reason. */
+export type InspectionStatus = 'DRAFT' | 'SUBMITTED' | 'SKIPPED';
+
+export interface InspectionMedia {
+  id: string;
+  kind: 'PHOTO' | 'VIDEO';
+  angle?: InspectionAngle;
+  /** Where the file lives in private storage. The server keeps only this. */
+  path?: string;
+  /** What the screen shows: a signed link, or a data link in local demo mode. */
+  url: string;
+  createdAt: string;
+}
+
+export interface InspectionDamage {
+  id: string;
+  /** Position on the car map, in percent of its width and height (0 to 100). */
+  x: number;
+  y: number;
+  type: 'SCRATCH' | 'DENT' | 'CRACK' | 'PAINT' | 'OTHER';
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  note?: string;
+  photoPath?: string;
+  photoUrl?: string;
+  /** After the wash: a damage that was not there before. */
+  isNew?: boolean;
+}
+
+export interface Inspection {
+  id: string;
+  orderId: string;
+  phase: InspectionPhase;
+  status: InspectionStatus;
+  noDamage: boolean;
+  notes?: string;
+  media: InspectionMedia[];
+  damages: InspectionDamage[];
+  inspectedBy: string;
+  startedAt: string;
+  submittedAt?: string;
+  bypassReason?: string;
+}
