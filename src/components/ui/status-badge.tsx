@@ -4,6 +4,18 @@ import React from 'react';
 import { OrderStatus } from '@/domain/types';
 import { STATUS_META } from '@/domain/status-machine';
 import { cn } from '@/lib/utils';
+import { useLanguage } from '@/context/language-context';
+
+const AR_CUSTOMER_LABELS: Record<OrderStatus, string> = {
+  NEW: 'تم استلام الطلب',
+  ASSIGNED: 'تم تعيين الفريق',
+  IN_PROGRESS: 'جاري غسل السيارة',
+  QUALITY_CHECK: 'قيد الفحص',
+  COMPLETED: 'اكتمل الغسيل',
+  RETURNED_TO_PARKING: 'جاهزة في الموقف',
+  ISSUE_REPORTED: 'تحديث على الخدمة',
+  CANCELLED: 'تم إلغاء الطلب',
+};
 
 interface StatusBadgeProps {
   status: OrderStatus;
@@ -12,13 +24,16 @@ interface StatusBadgeProps {
 }
 
 export function StatusBadge({ status, isCustomerView = false, className }: StatusBadgeProps) {
+  const { language } = useLanguage();
   const meta = STATUS_META[status] || {
     label: status,
     customerLabel: status,
     badgeVariant: 'neutral',
   };
 
-  const label = isCustomerView ? meta.customerLabel : meta.label;
+  const label = isCustomerView
+    ? (language === 'ar' && AR_CUSTOMER_LABELS[status]) || meta.customerLabel
+    : meta.label;
 
   const styleMap: Record<string, { bg: string; text: string; dot: string; border: string }> = {
     neutral: { bg: 'bg-fill', text: 'text-body', dot: 'bg-zinc-400', border: 'border-transparent' },
