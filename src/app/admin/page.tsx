@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { mockStore } from '@/data/mock/store';
@@ -81,6 +81,15 @@ export default function AdminDashboardPage() {
   const [creditAdjustmentReason, setCreditAdjustmentReason] = useState<string>('Corporate VIP Complimentary Pass');
   const [historyModalClient, setHistoryModalClient] = useState<Employee | null>(null);
   const [bayLookup, setBayLookup] = useState('');
+
+  // In-app dialogs (replace the browser's confirm / prompt boxes)
+  type AdminDialog = { kind: 'cancel' | 'qc' | 'issue' | 'cancelSub'; subId?: string } | null;
+  const [dialog, setDialog] = useState<AdminDialog>(null);
+  const [dialogText, setDialogText] = useState('');
+
+  // Global search (Ctrl/⌘ K)
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Client Directory Filters
@@ -206,6 +215,57 @@ export default function AdminDashboardPage() {
     };
   }, [authState]);
 
+  // ---- A new order arrives: toast and a short sound ----
+  const seenOrderIds = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (orders.length === 0 && seenOrderIds.current === null) return;
+    if (seenOrderIds.current === null) {
+      seenOrderIds.current = new Set(orders.map((o) => o.id));
+      return;
+    }
+    const known = seenOrderIds.current;
+    const fresh = orders.filter((o) => !known.has(o.id) && o.status === 'NEW');
+    orders.forEach((o) => known.add(o.id));
+    if (fresh.length === 0) return;
+    setToastMessage(
+      fresh.length === 1
+        ? `New order ${fresh[0].reference} at bay ${fresh[0].bayCodeSnapshot}`
+        : `${fresh.length} new orders`
+    );
+    setTimeout(() => setToastMessage(null), 5000);
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch {
+      // Sound is optional
+    }
+  }, [orders]);
+
+  // ---- Ctrl/⌘ K opens the global search; Esc closes anything open ----
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+      } else if (e.key === 'Escape') {
+        setSearchOpen(false);
+        setDialog(null);
+        setDialogText('');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // ---- The server refused or could not save something: say so ----
   useEffect(() => {
     return mockStore.onSyncIssue((messages) => {
@@ -274,7 +334,7 @@ export default function AdminDashboardPage() {
   }, [employees, clientSearchQuery, clientSubFilter, subscriptions]);
 
   // Order Transition Handler
-  const handleTransition = (toStatus: OrderStatus, customAssigneeId?: string) => {
+  const handleTransition = (toStatus: OrderStatus, customAssigneeId?: string, note?: string) => {
     if (!selectedOrder) return;
     try {
       const payload: Parameters<typeof mockStore.transitionOrder>[2] = {};
@@ -302,7 +362,7 @@ export default function AdminDashboardPage() {
       } else if (toStatus === 'COMPLETED') {
         payload.qualityCheck = {
           checklist: { 'Surface Dry': true, 'Glass Cleared': true, 'Tires Dressed': true },
-          notes: qcNotes || 'Sign-off complete',
+          notes: note || qcNotes || 'Sign-off complete',
           passed: true,
           checkedBy: 'Tower Operations Lead',
           checkedAt: new Date().toISOString(),
@@ -320,11 +380,11 @@ export default function AdminDashboardPage() {
         payload.issue = {
           category: 'ACCESS',
           severity: 'MEDIUM',
-          description: issueDesc || 'Bay obstruction or vehicle locked.',
+          description: note || issueDesc || 'Bay obstruction or vehicle locked.',
         };
       } else if (toStatus === 'CANCELLED') {
         payload.cancellation = {
-          reason: 'Cancelled from Tower Operations Console',
+          reason: note || 'Cancelled from Tower Operations Console',
         };
       }
 
@@ -380,7 +440,10 @@ export default function AdminDashboardPage() {
 
   // High-Level Operational Metrics
   const metrics = useMemo(() => {
-    const totalRevenueMinor = orders.reduce((acc, o) => acc + (o.priceSnapshot?.amountMinor || 0), 0);
+    // Cancelled orders are not revenue, and a wash paid with a pass credit was paid when the pass was bought
+    const totalRevenueMinor = orders
+      .filter((o) => o.status !== 'CANCELLED' && o.paymentMode === 'ONE_TIME')
+      .reduce((acc, o) => acc + (o.priceSnapshot?.amountMinor || 0), 0);
     const subRevenueMinor = subscriptions.filter((s) => s.status === 'ACTIVE').length * 14000;
     const combinedRevenue = totalRevenueMinor + subRevenueMinor;
 
@@ -491,6 +554,106 @@ export default function AdminDashboardPage() {
   const stageIsCleaning = selectedOrder
     ? selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'QUALITY_CHECK'
     : false;
+
+  const closeDialog = () => {
+    setDialog(null);
+    setDialogText('');
+  };
+
+  const confirmDialog = () => {
+    if (!dialog) return;
+    const text = dialogText.trim();
+    if (dialog.kind === 'issue' && !text) return;
+    if (dialog.kind === 'cancel') handleTransition('CANCELLED', undefined, text || undefined);
+    if (dialog.kind === 'qc') handleTransition('COMPLETED', undefined, text || undefined);
+    if (dialog.kind === 'issue') handleTransition('ISSUE_REPORTED', undefined, text);
+    if (dialog.kind === 'cancelSub' && dialog.subId) {
+      mockStore.cancelSubscription(dialog.subId);
+      showToast('Subscription cancelled');
+      reloadData();
+    }
+    closeDialog();
+  };
+
+  const dialogConfig = {
+    cancel: {
+      title: 'Cancel this order?',
+      body: selectedOrder ? `${selectedOrder.reference} will be cancelled. A pass credit is refunded automatically.` : '',
+      label: 'Reason (optional)',
+      placeholder: 'e.g. Customer asked to cancel',
+      confirm: 'Cancel order',
+      tone: 'danger',
+    },
+    qc: {
+      title: 'Sign off quality check',
+      body: 'Confirm the car is clean: surface dry, glass clear, tires dressed.',
+      label: 'Notes (optional)',
+      placeholder: 'e.g. Surface dry, streak-free',
+      confirm: 'Sign off',
+      tone: 'primary',
+    },
+    issue: {
+      title: 'Report an issue',
+      body: 'The order is put on hold until the issue is resolved.',
+      label: 'What happened?',
+      placeholder: 'e.g. Bay obstructed, vehicle locked',
+      confirm: 'Report issue',
+      tone: 'warning',
+    },
+    cancelSub: {
+      title: 'Cancel this pass?',
+      body: 'The client loses the pass. Washes already used stay in the history.',
+      label: '',
+      placeholder: '',
+      confirm: 'Cancel pass',
+      tone: 'danger',
+    },
+  } as const;
+
+  // Global search results
+  const gq = globalQuery.trim().toLowerCase();
+  const searchOrders = gq
+    ? orders
+        .filter((o) => {
+          const c = employees.find((e) => e.id === o.employeeId);
+          return (
+            o.reference.toLowerCase().includes(gq) ||
+            o.bayCodeSnapshot === gq.replace(/\D/g, '') && gq.replace(/\D/g, '') !== '' ||
+            o.vehicleSnapshot.plateNumber.toLowerCase().includes(gq) ||
+            (c?.fullName || '').toLowerCase().includes(gq) ||
+            (c?.phone || '').replace(/\D/g, '').includes(gq.replace(/\D/g, '') || '\u0000')
+          );
+        })
+        .slice(0, 6)
+    : [];
+  const searchClients = gq
+    ? employees
+        .filter(
+          (e) =>
+            e.fullName.toLowerCase().includes(gq) ||
+            (e.employeeNo || '').toLowerCase().includes(gq) ||
+            (e.qid || '').includes(gq) ||
+            (e.phone || '').replace(/\D/g, '').includes(gq.replace(/\D/g, '') || '\u0000')
+        )
+        .slice(0, 5)
+    : [];
+
+  // Real analytics, calculated from the events and orders (no invented numbers)
+  const turnaroundMinutes = (() => {
+    const events = mockStore.getDb().orderEvents;
+    const mins = orders
+      .filter((o) => o.status === 'RETURNED_TO_PARKING')
+      .map((o) => {
+        const ev = events.find((e) => e.orderId === o.id && e.to === 'RETURNED_TO_PARKING');
+        return ev ? (new Date(ev.createdAt).getTime() - new Date(o.createdAt).getTime()) / 60000 : null;
+      })
+      .filter((m): m is number => m !== null && m >= 0);
+    return mins.length ? Math.round(mins.reduce((a, b) => a + b, 0) / mins.length) : null;
+  })();
+  const qcChecked = orders.filter((o) => o.qualityCheck);
+  const qcPassRate = qcChecked.length
+    ? Math.round((qcChecked.filter((o) => o.qualityCheck!.passed).length / qcChecked.length) * 100)
+    : null;
 
   // Staff can only take a valid next step; everything else is disabled
   const canGo = (to: OrderStatus) =>
@@ -631,6 +794,15 @@ export default function AdminDashboardPage() {
                 ? lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 : 'Syncing'}
             </span>
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="hidden md:flex items-center gap-2 h-9 px-4 rounded-full bg-tile hover:bg-raised text-sm text-muted hover:text-ink transition"
+              aria-label="Search everything"
+            >
+              <Search className="h-4 w-4" />
+              <span>Search</span>
+              <kbd className="text-xs text-dim">Ctrl K</kbd>
+            </button>
             <ThemeToggle />
             <button
               onClick={reloadData}
@@ -785,11 +957,7 @@ export default function AdminDashboardPage() {
 
                       {canGo('CANCELLED') && (
                         <button
-                          onClick={() => {
-                            if (confirm(`Are you sure you want to cancel order ${selectedOrder.reference}?`)) {
-                              handleTransition('CANCELLED');
-                            }
-                          }}
+                          onClick={() => setDialog({ kind: 'cancel' })}
                           className="px-4 py-2 rounded-full bg-fill-soft hover:bg-rose-400/15 text-body hover:text-rose-300 text-sm transition cursor-pointer whitespace-nowrap"
                         >
                           Cancel Order
@@ -1091,28 +1259,18 @@ export default function AdminDashboardPage() {
                           <h3 className="text-base font-semibold text-ink">Operational Escalation &amp; QC</h3>
                           <div className="grid grid-cols-2 gap-2">
                             <button
-                              onClick={() => {
-                                const note = prompt('Enter inspection sign-off notes (e.g. Surface dry, streak-free):', 'QC Inspection Passed');
-                                if (note) {
-                                  setQcNotes(note);
-                                  handleTransition('COMPLETED');
-                                }
-                              }}
-                              className="py-2.5 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink transition cursor-pointer flex items-center justify-center gap-1.5"
+                              onClick={() => setDialog({ kind: 'qc' })}
+                              disabled={!canGo('COMPLETED')}
+                              className="py-2.5 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               <Award className="h-4 w-4" />
                               <span>Sign-off QC</span>
                             </button>
 
                             <button
-                              onClick={() => {
-                                const desc = prompt('Enter operational issue description (e.g. Bay obstructed, vehicle locked):');
-                                if (desc) {
-                                  setIssueDesc(desc);
-                                  handleTransition('ISSUE_REPORTED');
-                                }
-                              }}
-                              className="py-2.5 rounded-full bg-amber-400/10 hover:bg-amber-400/20 text-sm text-amber-300 transition cursor-pointer flex items-center justify-center gap-1.5"
+                              onClick={() => setDialog({ kind: 'issue' })}
+                              disabled={!canGo('ISSUE_REPORTED')}
+                              className="py-2.5 rounded-full bg-amber-400/10 hover:bg-amber-400/20 text-sm text-amber-300 transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               <AlertTriangle className="h-4 w-4" />
                               <span>Report Issue</span>
@@ -1392,13 +1550,7 @@ export default function AdminDashboardPage() {
                               <td className="py-3.5 px-5 text-right">
                                 {sub.status === 'ACTIVE' && (
                                   <button
-                                    onClick={() => {
-                                      if (confirm('Cancel this active corporate subscription?')) {
-                                        mockStore.cancelSubscription(sub.id);
-                                        showToast('Subscription cancelled');
-                                        reloadData();
-                                      }
-                                    }}
+                                    onClick={() => setDialog({ kind: 'cancelSub', subId: sub.id })}
                                     className="px-3.5 py-1.5 rounded-full bg-rose-400/10 hover:bg-rose-400/20 text-rose-300 text-sm transition cursor-pointer"
                                   >
                                     Cancel
@@ -1561,11 +1713,11 @@ export default function AdminDashboardPage() {
                     <div className="space-y-3 text-sm">
                       <div className="flex justify-between">
                         <span className="text-muted">Average Turnaround</span>
-                        <span className="tabular-nums text-ink">28 min</span>
+                        <span className="tabular-nums text-ink">{turnaroundMinutes === null ? 'No data yet' : `${turnaroundMinutes} min`}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted">QC Pass Rate</span>
-                        <span className="tabular-nums text-ink">99.4%</span>
+                        <span className="tabular-nums text-ink">{qcPassRate === null ? 'No data yet' : `${qcPassRate}%`}</span>
                       </div>
                     </div>
                     <div className="pt-4 border-t border-line">
@@ -1628,6 +1780,142 @@ export default function AdminDashboardPage() {
       {/* ---------------------------------------------------------------------- */}
       {/* LIGHTBOX                                                               */}
       {/* ---------------------------------------------------------------------- */}
+      {dialog && (
+        <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-md flex items-center justify-center p-4" onClick={closeDialog}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={dialogConfig[dialog.kind].title}
+            className="w-full max-w-[420px] bg-tile rounded-3xl p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h4 className="text-lg font-semibold text-ink tracking-tight">{dialogConfig[dialog.kind].title}</h4>
+              <p className="text-sm text-muted mt-1">{dialogConfig[dialog.kind].body}</p>
+            </div>
+
+            {dialogConfig[dialog.kind].label && (
+              <div>
+                <label htmlFor="dialog-text" className="text-sm text-body block mb-2">{dialogConfig[dialog.kind].label}</label>
+                <textarea
+                  id="dialog-text"
+                  autoFocus
+                  rows={3}
+                  value={dialogText}
+                  onChange={(e) => setDialogText(e.target.value)}
+                  placeholder={dialogConfig[dialog.kind].placeholder}
+                  className="w-full bg-raised rounded-2xl px-4 py-3 text-sm text-ink placeholder-dim resize-none"
+                />
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={confirmDialog}
+                disabled={dialog.kind === 'issue' && !dialogText.trim()}
+                className={`flex-1 py-3 rounded-full text-sm font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                  dialogConfig[dialog.kind].tone === 'danger'
+                    ? 'bg-rose-500 hover:bg-rose-400 text-white'
+                    : dialogConfig[dialog.kind].tone === 'warning'
+                    ? 'bg-amber-400 hover:bg-amber-300 text-black'
+                    : 'bg-[#0071e3] hover:bg-[#0077ed] text-white'
+                }`}
+              >
+                {dialogConfig[dialog.kind].confirm}
+              </button>
+              <button onClick={closeDialog} className="px-5 py-3 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink">
+                Keep it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {searchOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-scrim backdrop-blur-md flex items-start justify-center pt-[12vh] px-4"
+          onClick={() => setSearchOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search"
+            className="w-full max-w-[560px] bg-tile rounded-3xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 px-5 py-4">
+              <Search className="h-5 w-5 text-dim flex-shrink-0" />
+              <input
+                autoFocus
+                value={globalQuery}
+                onChange={(e) => setGlobalQuery(e.target.value)}
+                placeholder="Order, plate, bay, client, phone or employee number"
+                className="w-full bg-transparent text-[15px] text-ink placeholder-dim outline-none"
+              />
+              <kbd className="text-xs text-dim">Esc</kbd>
+            </div>
+
+            <div className="max-h-[50vh] overflow-y-auto px-2 pb-3">
+              {!gq ? (
+                <p className="px-3 py-6 text-sm text-dim text-center">Start typing to search orders and clients.</p>
+              ) : searchOrders.length === 0 && searchClients.length === 0 ? (
+                <p className="px-3 py-6 text-sm text-dim text-center">Nothing found.</p>
+              ) : (
+                <>
+                  {searchOrders.length > 0 && <p className="px-3 pt-2 pb-1 text-xs text-dim">Orders</p>}
+                  {searchOrders.map((o) => (
+                    <button
+                      key={o.id}
+                      onClick={() => {
+                        setSelectedOrderId(o.id);
+                        setActiveTab('DISPATCH');
+                        setSearchQuery('');
+                        setStatusFilter('ALL');
+                        setSearchOpen(false);
+                        setGlobalQuery('');
+                      }}
+                      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl hover:bg-fill text-start"
+                    >
+                      <span className="min-w-0">
+                        <span className="text-sm font-semibold text-ink tabular-nums block truncate">
+                          {o.reference} · Bay {o.bayCodeSnapshot}
+                        </span>
+                        <span className="text-xs text-dim block truncate">
+                          {o.vehicleSnapshot.plateNumber} · {employees.find((e) => e.id === o.employeeId)?.fullName || 'Client'}
+                        </span>
+                      </span>
+                      {renderStatusPill(o.status)}
+                    </button>
+                  ))}
+
+                  {searchClients.length > 0 && <p className="px-3 pt-3 pb-1 text-xs text-dim">Clients</p>}
+                  {searchClients.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        setClientSearchQuery(c.fullName);
+                        setActiveTab('CLIENTS');
+                        setSearchOpen(false);
+                        setGlobalQuery('');
+                      }}
+                      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl hover:bg-fill text-start"
+                    >
+                      <span className="min-w-0">
+                        <span className="text-sm font-semibold text-ink block truncate">{c.fullName}</span>
+                        <span className="text-xs text-dim block truncate tabular-nums">
+                          {c.employeeNo || ''} {c.phone ? `· ${c.phone}` : ''}
+                        </span>
+                      </span>
+                      <Users className="h-4 w-4 text-dim flex-shrink-0" />
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {lightboxPhoto && (
         <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-md flex items-center justify-center p-4">
           <div className="relative max-w-3xl w-full bg-tile rounded-3xl p-5 space-y-4 animate-in fade-in zoom-in-95 duration-150">
