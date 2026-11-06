@@ -4,8 +4,6 @@ import "./globals.css";
 import { AuthProvider } from "@/context/auth-context";
 import { LanguageProvider } from "@/context/language-context";
 import { ThemeProvider } from "@/context/theme-context";
-import { NavigationHeader } from "@/components/shared/navigation-header";
-import { Suspense } from "react";
 
 const inter = Inter({
   variable: "--font-sans",
@@ -46,9 +44,6 @@ export default function RootLayout({
         <AuthProvider>
           <LanguageProvider>
             <div className="flex flex-col min-h-screen">
-              <Suspense fallback={<div className="h-12 bg-canvas" />}>
-                <NavigationHeader />
-              </Suspense>
               <main className="flex-1">{children}</main>
             </div>
           </LanguageProvider>

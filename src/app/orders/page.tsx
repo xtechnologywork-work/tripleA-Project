@@ -8,7 +8,7 @@ import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
 import { Order } from '@/domain/types';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { formatDateTime } from '@/lib/utils';
+import { formatDateTime, plateLabel } from '@/lib/utils';
 import {
   Car,
   Clock,
@@ -31,17 +31,41 @@ export default function EmployeeOrdersPage() {
   const { isRtl, toggleLanguage } = useLanguage();
   const [orders, setOrders] = useState<Order[]>([]);
   const [creditBalance, setCreditBalance] = useState<number>(0);
+  const [hasPass, setHasPass] = useState(false);
+  // False until we know whose orders to show, so the page never flashes "No orders yet"
+  const [ready, setReady] = useState(false);
+  const lang = isRtl ? 'ar' : 'en';
 
   useEffect(() => {
     const loadData = () => {
-      const all = mockStore.getOrders().filter((o) => o.employeeId === actor.id);
+      // The signed-in employee: the saved sign in, or the account the app is acting as
+      let me = actor.id;
+      try {
+        const phone = localStorage.getItem('cb_active_employee_phone') || '';
+        const found = phone ? mockStore.getEmployeeByPhone(phone) : undefined;
+        if (found) me = found.id;
+      } catch {
+        // Ignore
+      }
+      if (!me) return;
+      const all = mockStore
+        .getOrders()
+        .filter((o) => o.employeeId === me)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setOrders(all);
-      setCreditBalance(mockStore.getCreditBalance(actor.id));
+      setCreditBalance(mockStore.getCreditBalance(me));
+      setHasPass(!!mockStore.getEmployeeSubscription(me));
+      setReady(true);
     };
 
     loadData();
     const unsub = mockStore.subscribe(loadData);
-    return () => unsub();
+    // On a slow connection, stop waiting after a moment and show what we have
+    const timer = setTimeout(() => setReady(true), 3000);
+    return () => {
+      unsub();
+      clearTimeout(timer);
+    };
   }, [actor.id]);
 
   const ChevronBack = isRtl ? ChevronRight : ChevronLeft;
@@ -56,14 +80,14 @@ export default function EmployeeOrdersPage() {
         <div className="max-w-[1040px] mx-auto h-full px-4 md:px-8 flex items-center justify-between gap-3">
           <Link href="/" className="flex items-center gap-1.5 text-sm text-link hover:text-link-soft py-2 whitespace-nowrap">
             <ChevronBack className="h-5 w-5" />
-            <span>{isRtl ? 'الرئيسية' : 'Portal'}</span>
+            <span>{isRtl ? 'الرئيسية' : 'Home'}</span>
           </Link>
 
           <div className="text-center min-w-0">
             <h1 className="text-[14px] font-semibold text-ink leading-tight truncate">
               {isRtl ? 'سجل الطلبات' : 'Order History'}
             </h1>
-            <span className="text-xs text-dim block truncate">TripleA · Lusail Towers</span>
+            <span className="text-xs text-dim block truncate">{isRtl ? 'تريبل إيه · أبراج لوسيل' : 'TripleA · Lusail Towers'}</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -79,23 +103,25 @@ export default function EmployeeOrdersPage() {
       </header>
 
       <div className="max-w-[1040px] mx-auto px-4 md:px-8 pt-4 space-y-8">
-        {/* Pass balance */}
-        <section className={`${tile} p-6 md:p-7 flex items-center justify-between gap-6`}>
-          <div className="space-y-2">
-            <span className="text-sm md:text-base text-muted block">
-              {isRtl ? 'باقة الغسيل النشطة (140 ر.ق)' : 'Wash pass (140 QAR)'}
-            </span>
-            <div className="flex items-baseline gap-3">
-              <span className="text-[48px] md:text-[56px] leading-none font-semibold text-ink tracking-tight tabular-nums">
-                {creditBalance}
-              </span>
-              <span className="text-base md:text-base text-muted">{isRtl ? 'غسلات متبقية' : 'washes left'}</span>
+        {/* Pass balance (only for an employee who has a pass) */}
+        <section className={`${tile} p-5 md:p-7 flex items-center justify-between gap-4 md:gap-6`}>
+          {hasPass ? (
+            <div className="space-y-2 min-w-0">
+              <span className="text-sm md:text-base text-muted block">{isRtl ? 'باقة الغسيل' : 'Your wash pass'}</span>
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <span className="text-[48px] md:text-[56px] leading-none font-semibold text-ink tracking-[-0.02em] tabular-nums">
+                  {creditBalance}
+                </span>
+                <span className="text-base text-muted">{isRtl ? 'غسلات متبقية' : 'washes left'}</span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <p className="text-[15px] text-muted">{isRtl ? 'اطلب غسلة لسيارتك في موقفها.' : 'Order a wash at your parking bay.'}</p>
+          )}
 
           <Link
             href="/"
-            className="flex items-center gap-2 px-6 py-3 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white font-semibold text-[14px] transition whitespace-nowrap flex-shrink-0"
+            className="flex items-center gap-2 px-5 md:px-6 py-3 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white font-semibold text-[14px] transition active:scale-95 whitespace-nowrap flex-shrink-0"
           >
             <Plus className="h-4 w-4 stroke-[3]" />
             <span>{isRtl ? 'طلب غسيل' : 'New wash'}</span>
@@ -105,10 +131,16 @@ export default function EmployeeOrdersPage() {
         {/* Orders */}
         <section className="space-y-4">
           <h2 className="text-[19px] font-semibold text-ink tracking-tight px-1">
-            {isRtl ? 'قائمة الطلبات' : 'Recent orders'} <span className="text-dim font-normal tabular-nums">({orders.length})</span>
+            {isRtl ? 'قائمة الطلبات' : 'Recent orders'} {ready && <span className="text-dim font-normal tabular-nums">({orders.length})</span>}
           </h2>
 
-          {orders.length === 0 ? (
+          {!ready ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3" aria-busy="true">
+              {[0, 1].map((i) => (
+                <div key={i} className={`${tile} h-[112px] animate-pulse`} />
+              ))}
+            </div>
+          ) : orders.length === 0 ? (
             <div className={`${tile} p-12 text-center space-y-5`}>
               <Car className="h-12 w-12 text-faint mx-auto stroke-[1.5]" />
               <div className="space-y-1.5">
@@ -145,12 +177,13 @@ export default function EmployeeOrdersPage() {
                       </div>
 
                       <div className="text-[14px] text-body truncate">
-                        {ord.vehicleSnapshot.plateNumber} · {ord.vehicleSnapshot.make} {ord.vehicleSnapshot.model}
+                        {plateLabel(ord.vehicleSnapshot.plateNumber, lang)}
+                        {ord.vehicleSnapshot.make && ord.vehicleSnapshot.make !== 'Vehicle' ? ` · ${ord.vehicleSnapshot.make} ${ord.vehicleSnapshot.model || ''}` : ''}
                       </div>
 
                       <div className="text-sm text-dim flex items-center gap-1.5 tabular-nums">
                         <Clock className="h-3.5 w-3.5" />
-                        <span>{formatDateTime(ord.createdAt)}</span>
+                        <span>{formatDateTime(ord.createdAt, lang)}</span>
                       </div>
                     </div>
 

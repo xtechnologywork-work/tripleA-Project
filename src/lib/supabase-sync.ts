@@ -1072,6 +1072,16 @@ async function validateEmployeeBatch(
       if (digits.length < 8 || digits.length > 15) errors.push('profile: phone number is not valid');
       if (qid.length > 11) errors.push('profile: QID is too long');
       const current = mapEmployeeRow(myRow);
+      // A mobile number can belong to one account only: sign in finds people by it
+      const newLast8 = digits.slice(-8);
+      const oldLast8 = (current.phone || '').replace(/\D/g, '').slice(-8);
+      if (digits.length >= 8 && newLast8 !== oldLast8) {
+        const other = await findEmployeeByPhone(newLast8);
+        if (other && other.id !== me) {
+          errors.push('profile: this mobile number belongs to another account');
+          continue;
+        }
+      }
       next.push({ ...current, fullName: name, phone: e.phone, qid: qid || undefined });
     }
     fixed.employees = next;

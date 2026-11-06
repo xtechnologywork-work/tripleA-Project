@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { mockStore } from '@/data/mock/store';
 import { Order, OrderEvent, OrderPhoto } from '@/domain/types';
-import { formatDateTime, formatQAR } from '@/lib/utils';
+import { formatDateTime, formatQAR, plateLabel, serviceName } from '@/lib/utils';
+import { SUPPORT_PHONE } from '@/lib/support';
 import {
   ArrowLeft,
   ArrowRight,
@@ -45,6 +46,11 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   const [photos, setPhotos] = useState<OrderPhoto[]>([]);
   const [, setEvents] = useState<OrderEvent[]>([]);
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
+  // After a few seconds without the order, say so instead of spinning forever
+  const [gaveUp, setGaveUp] = useState(false);
+  const [askCancel, setAskCancel] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+  const lang = isRtl ? 'ar' : 'en';
 
   useEffect(() => {
     const fetchOrder = () => {
@@ -71,13 +77,48 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
     };
   }, [reference]);
 
+  useEffect(() => {
+    if (order) return;
+    const timer = setTimeout(() => setGaveUp(true), 6000);
+    return () => clearTimeout(timer);
+  }, [order]);
+
+  // Escape closes the photo
+  useEffect(() => {
+    if (!lightboxPhoto) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxPhoto(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxPhoto]);
+
   if (!order) {
     return (
-      <div className="min-h-screen bg-canvas text-ink flex items-center justify-center p-4">
-        <div className="text-center space-y-3 text-sm text-muted">
-          <RotateCw className="h-5 w-5 animate-spin mx-auto text-ink" />
-          <p>{isRtl ? `جاري تحميل تفاصيل الطلب ${reference}...` : `Loading order reference ${reference}...`}</p>
-        </div>
+      <div dir={isRtl ? 'rtl' : 'ltr'} className="min-h-screen bg-canvas text-ink flex items-center justify-center p-6">
+        {gaveUp ? (
+          <div className="text-center space-y-5 max-w-[320px]">
+            <h1 className="text-[24px] font-semibold tracking-[-0.02em]">{isRtl ? 'لم نجد هذا الطلب' : 'We could not find this order'}</h1>
+            <p className="text-[15px] text-muted leading-relaxed">
+              {isRtl
+                ? 'ربما لم يُحفظ الطلب، أو أنه يخص حساباً آخر. تحقق من سجل طلباتك.'
+                : 'It may not have been saved, or it belongs to another account. Check your order history.'}
+            </p>
+            <div className="flex flex-col gap-2.5">
+              <Link href="/orders" className="py-3 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white text-[15px] transition active:scale-95">
+                {isRtl ? 'سجل الطلبات' : 'Order history'}
+              </Link>
+              <Link href="/" className="py-3 rounded-full bg-fill hover:bg-fill-strong text-ink text-[15px] transition active:scale-95">
+                {isRtl ? 'الرئيسية' : 'Home'}
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <div className="text-center space-y-3 text-sm text-muted">
+            <RotateCw className="h-5 w-5 animate-spin mx-auto text-ink" />
+            <p>{isRtl ? 'جاري تحميل الطلب...' : 'Loading your order...'}</p>
+          </div>
+        )}
       </div>
     );
   }
@@ -85,7 +126,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   // 4 Core Progression Milestones
   const statusSteps = [
     { key: 'NEW', label: isRtl ? 'تم الاستلام' : 'Received', desc: isRtl ? 'بانتظار التعيين' : 'In queue' },
-    { key: 'ASSIGNED', label: isRtl ? 'تم التعيين' : 'Assigned', desc: isRtl ? 'الفني في الطريق' : 'En route' },
+    { key: 'ASSIGNED', label: isRtl ? 'تم التعيين' : 'Assigned', desc: isRtl ? 'الفريق جاهز لسيارتك' : 'Team ready for your car' },
     { key: 'IN_PROGRESS', label: isRtl ? 'جاري الغسيل' : 'Cleaning', desc: isRtl ? 'تنظيف هيدرو فاخر' : 'Hydro detailing' },
     { key: 'RETURNED_TO_PARKING', label: isRtl ? 'جاهزة بالموقف' : 'Ready at Bay', desc: isRtl ? 'تم إرجاع السيارة' : 'Parked & ready' },
   ];
@@ -114,19 +155,32 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   const isIssue = order.status === 'ISSUE_REPORTED';
 
   const handleCancel = () => {
-    if (confirm(isRtl ? 'هل تريد بالتأكيد إلغاء طلب الغسيل؟' : 'Are you sure you want to cancel this detailing request?')) {
-      try {
-        mockStore.transitionOrder(
-          order.id,
-          'CANCELLED',
-          { cancellation: { reason: 'Client cancelled request' } },
-          actor
-        );
-      } catch (err: unknown) {
-        alert((err instanceof Error ? err.message : String(err)) || 'Unable to cancel order');
-      }
+    try {
+      // The person cancelling is the owner of the order (the server checks this against the sign in)
+      const owner = mockStore.getEmployeeById(order.employeeId);
+      const who =
+        actor.id === order.employeeId
+          ? actor
+          : { type: 'EMPLOYEE' as const, id: order.employeeId, name: owner?.fullName || '', email: owner?.email || '' };
+      mockStore.transitionOrder(
+        order.id,
+        'CANCELLED',
+        { cancellation: { reason: 'Client cancelled request' } },
+        who
+      );
+      setAskCancel(false);
+      setCancelError('');
+    } catch (err: unknown) {
+      setCancelError((err instanceof Error ? err.message : String(err)) || (isRtl ? 'تعذر إلغاء الطلب' : 'Could not cancel the order'));
     }
   };
+
+  const cancelReason =
+    !order.cancellation?.reason || order.cancellation.reason === 'Client cancelled request'
+      ? isRtl
+        ? 'بواسطتك'
+        : 'by you'
+      : order.cancellation.reason;
 
   // Get dynamic headline
   const getHeadline = () => {
@@ -137,7 +191,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
       case 'NEW':
         return isRtl ? 'تم استلام طلبك بنجاح' : 'Order received';
       case 'ASSIGNED':
-        return isRtl ? 'تم تعيين فني الغسيل' : 'Technician assigned';
+        return isRtl ? 'تم تعيين الفريق' : 'Team assigned';
       case 'IN_PROGRESS':
         return isRtl ? 'جاري تنظيف وتلميع سيارتك' : 'Washing your car';
       case 'QUALITY_CHECK':
@@ -173,7 +227,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
             <h1 className="text-[14px] font-semibold text-ink leading-tight truncate">
               {isRtl ? 'تتبع الغسيل المباشر' : 'Live status'}
             </h1>
-            <span className="text-xs text-dim block truncate">TripleA · Lusail Towers</span>
+            <span className="text-xs text-dim block truncate">{isRtl ? 'تريبل إيه · أبراج لوسيل' : 'TripleA · Lusail Towers'}</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -225,9 +279,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               <div className="p-4 rounded-2xl bg-rose-400/10 text-rose-300 text-sm flex items-center gap-3">
                 <XCircle className="h-5 w-5 text-rose-400 flex-shrink-0" />
                 <span>
-                  {isRtl
-                    ? `تم إلغاء الطلب: ${order.cancellation?.reason || 'بواسطة العميل'}`
-                    : `Order cancelled: ${order.cancellation?.reason || 'By customer'}`}
+                  {isRtl ? `تم إلغاء الطلب: ${cancelReason}` : `Order cancelled: ${cancelReason}`}
                 </span>
               </div>
             )}
@@ -293,16 +345,18 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                 </div>
               </div>
 
-              <a
-                href="https://wa.me/97455128901?text=Hello%20TripleA%20Concierge"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-11 h-11 rounded-full bg-fill hover:bg-fill-strong text-ink flex items-center justify-center flex-shrink-0 transition"
-                title={isRtl ? 'محادثة فورية' : 'Chat'}
-                aria-label={isRtl ? 'محادثة فورية' : 'Chat'}
-              >
-                <MessageSquare className="h-5 w-5" />
-              </a>
+              {SUPPORT_PHONE && (
+                <a
+                  href={`https://wa.me/${SUPPORT_PHONE}?text=Hello%20TripleA`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-11 h-11 rounded-full bg-fill hover:bg-fill-strong text-ink flex items-center justify-center flex-shrink-0 transition"
+                  title={isRtl ? 'محادثة فورية' : 'Chat'}
+                  aria-label={isRtl ? 'محادثة فورية' : 'Chat'}
+                >
+                  <MessageSquare className="h-5 w-5" />
+                </a>
+              )}
             </div>
           )}
 
@@ -318,7 +372,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                     {isRtl ? 'تم فحص سيارتك قبل الغسيل' : 'Your car was inspected before the wash'}
                   </p>
                   {beforeInspection.submittedAt && (
-                    <p className="text-sm text-muted tabular-nums">{formatDateTime(beforeInspection.submittedAt)}</p>
+                    <p className="text-sm text-muted tabular-nums">{formatDateTime(beforeInspection.submittedAt, lang)}</p>
                   )}
                 </div>
               </div>
@@ -356,7 +410,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={photos[0].blobKey}
-                  alt="Vehicle Rear Verification"
+                  alt={isRtl ? 'صورة مؤخرة السيارة' : 'Rear of the car'}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
                 <div className="absolute inset-0 bg-black/25 group-hover:bg-black/10 transition flex items-center justify-center">
@@ -402,21 +456,23 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
           <div className={`${tile} p-6 space-y-4`}>
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-[15px] font-semibold text-ink">{isRtl ? 'تفاصيل الإيصال والمركبة' : 'Receipt'}</h3>
-              <span className="text-sm text-dim tabular-nums">{formatDateTime(order.createdAt)}</span>
+              <span className="text-sm text-dim tabular-nums">{formatDateTime(order.createdAt, lang)}</span>
             </div>
 
             <dl className="space-y-3 text-[14px]">
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-muted">{isRtl ? 'رقم اللوحة' : 'Plate Number'}</dt>
                 <dd className="flex items-center gap-2 tabular-nums font-semibold text-ink bg-fill px-3.5 py-1 rounded-full">
-                  <span>{order.vehicleSnapshot.plateNumber}</span>
-                  <span className="text-xs text-muted font-normal">{isRtl ? 'قطر' : 'QATAR'}</span>
+                  <span>{plateLabel(order.vehicleSnapshot.plateNumber, lang)}</span>
+                  {order.vehicleSnapshot.plateNumber !== 'Photo Verified' && (
+                    <span className="text-xs text-muted font-normal">{isRtl ? 'قطر' : 'QATAR'}</span>
+                  )}
                 </dd>
               </div>
 
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-muted">{isRtl ? 'نوع الخدمة' : 'Service'}</dt>
-                <dd className="font-medium text-ink text-end">{order.serviceSnapshot.name}</dd>
+                <dd className="font-medium text-ink text-end">{serviceName(order.serviceSnapshot, lang)}</dd>
               </div>
 
               <div className="flex items-center justify-between gap-3">
@@ -431,9 +487,9 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                 <dd className="tabular-nums font-semibold text-ink text-end">
                   {order.paymentMode === 'CREDIT'
                     ? isRtl
-                      ? `${order.creditsUsed} رصيد باقة 140 ر.ق (0 ر.ق)`
-                      : `${order.creditsUsed} Pass Credit (0 QAR)`
-                    : formatQAR(order.priceSnapshot?.amountMinor || 0)}
+                      ? `من الباقة · ${order.creditsUsed} غسلة`
+                      : `Wash pass · ${order.creditsUsed} wash`
+                    : formatQAR(order.priceSnapshot?.amountMinor || 0, lang)}
                 </dd>
               </div>
             </dl>
@@ -449,20 +505,25 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               <ArrowFwd className="h-4 w-4" />
             </Link>
 
-            <a
-              href="https://wa.me/97455128901?text=Hello%20TripleA%20Concierge"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full py-3 rounded-full bg-fill hover:bg-fill-strong text-body hover:text-ink text-[14px] transition flex items-center justify-center gap-2"
-            >
-              <MessageSquare className="h-4 w-4" />
-              <span>{isRtl ? 'محادثة فورية مع الكونسيرج (واتساب)' : 'Chat on WhatsApp'}</span>
-            </a>
+            {SUPPORT_PHONE && (
+              <a
+                href={`https://wa.me/${SUPPORT_PHONE}?text=Hello%20TripleA`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-3 rounded-full bg-fill hover:bg-fill-strong text-body hover:text-ink text-[14px] transition flex items-center justify-center gap-2"
+              >
+                <MessageSquare className="h-4 w-4" />
+                <span>{isRtl ? 'محادثة فورية مع الكونسيرج (واتساب)' : 'Chat on WhatsApp'}</span>
+              </a>
+            )}
 
             {order.status === 'NEW' && (
               <button
-                onClick={handleCancel}
-                className="w-full py-3 rounded-full bg-rose-400/10 hover:bg-rose-400/15 text-rose-300 text-[14px] transition"
+                onClick={() => {
+                  setCancelError('');
+                  setAskCancel(true);
+                }}
+                className="w-full py-3 rounded-full bg-rose-400/10 hover:bg-rose-400/15 text-rose-300 text-[14px] transition active:scale-95"
               >
                 {isRtl ? 'إلغاء الطلب' : 'Cancel Order'}
               </button>
@@ -471,10 +532,49 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
         </div>
       </div>
 
+      {/* Cancel dialog */}
+      {askCancel && (
+        <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setAskCancel(false)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cancel-title"
+            className="w-full max-w-[400px] rounded-[28px] bg-tile p-6 space-y-5 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="cancel-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">
+              {isRtl ? 'إلغاء هذا الطلب؟' : 'Cancel this order?'}
+            </h2>
+            <p className="text-[15px] text-muted leading-relaxed">
+              {order.paymentMode === 'CREDIT'
+                ? isRtl
+                  ? 'ستعود الغسلة إلى رصيد باقتك.'
+                  : 'The wash goes back to your pass.'
+                : isRtl
+                  ? 'لن يُحاسَب عليه أحد، ويمكنك طلب غسلة جديدة في أي وقت.'
+                  : 'You will not be charged, and you can order again any time.'}
+            </p>
+            {cancelError && (
+              <p role="alert" className="text-sm text-rose-300">
+                {cancelError}
+              </p>
+            )}
+            <div className="space-y-2.5">
+              <button onClick={handleCancel} className="w-full py-3.5 rounded-full bg-rose-500 hover:bg-rose-400 text-white text-[16px] transition active:scale-95">
+                {isRtl ? 'نعم، ألغِ الطلب' : 'Yes, cancel the order'}
+              </button>
+              <button onClick={() => setAskCancel(false)} className="w-full py-3.5 rounded-full bg-fill hover:bg-fill-strong text-ink text-[16px] transition active:scale-95">
+                {isRtl ? 'إبقاء الطلب' : 'Keep the order'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Lightbox */}
       {lightboxPhoto && (
-        <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-md flex items-center justify-center p-4">
-          <div className="relative max-w-lg w-full bg-tile rounded-3xl p-5 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-md flex items-center justify-center p-4" onClick={() => setLightboxPhoto(null)}>
+          <div className="relative max-w-lg w-full bg-tile rounded-3xl p-5 space-y-4 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <span className="text-[14px] font-semibold text-ink">
                 {isRtl ? 'صورة التحقق من لوحة السيارة' : 'Rear plate photo'}
@@ -482,14 +582,14 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               <button
                 onClick={() => setLightboxPhoto(null)}
                 className="w-9 h-9 rounded-full bg-fill text-ink hover:bg-fill-strong transition flex items-center justify-center"
-                aria-label="Close"
+                aria-label={isRtl ? 'إغلاق' : 'Close'}
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
             <div className="relative max-h-[70vh] overflow-hidden rounded-2xl bg-canvas flex items-center justify-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={lightboxPhoto} alt="Full verification photo" className="w-full h-auto max-h-[70vh] object-contain" />
+              <img src={lightboxPhoto} alt={isRtl ? 'صورة اللوحة بحجم كامل' : 'Rear plate photo, full size'} className="w-full h-auto max-h-[70vh] object-contain" />
             </div>
           </div>
         </div>

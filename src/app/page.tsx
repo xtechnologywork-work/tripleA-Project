@@ -43,6 +43,7 @@ import {
 
 import { EmployeeNotifications } from '@/components/notifications/employee-notifications';
 import { AddToHomeScreen } from '@/components/notifications/add-to-home-screen';
+import { SUPPORT_PHONE } from '@/lib/support';
 import { StatusBadge } from '@/components/ui/status-badge';
 
 type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
@@ -90,6 +91,7 @@ function BayOrderingClientScreen() {
   const [editMakeModel, setEditMakeModel] = useState('');
   const [editColor, setEditColor] = useState('');
   const [profileSaveSuccess, setProfileSaveSuccess] = useState(false);
+  const [profileError, setProfileError] = useState('');
 
   // The phone saved on this device pre-fills the sign-in field (once)
   useEffect(() => {
@@ -144,6 +146,23 @@ function BayOrderingClientScreen() {
 
   const handleSaveProfile = () => {
     if (!currentEmployee) return;
+
+    // Check the form here, so a mistake is explained instead of silently not saving
+    const nameTrim = editName.trim();
+    const phoneDigits = editPhone.replace(/\D/g, '');
+    if (nameTrim.length < 2 || nameTrim.length > 80) {
+      setProfileError(t('nameRequiredError'));
+      return;
+    }
+    if (phoneDigits.length < 8 || phoneDigits.length > 15) {
+      setProfileError(t('phoneError'));
+      return;
+    }
+    if (editPlate.trim().length > 20 || editColor.trim().length > 40 || editMakeModel.trim().length > 80) {
+      setProfileError(t('genericAuthError'));
+      return;
+    }
+    setProfileError('');
 
     const parts = editMakeModel.trim().split(' ');
     const newMake = parts[0] || '';
@@ -366,6 +385,23 @@ function BayOrderingClientScreen() {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Escape closes the open sheet
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (selectedPlan) {
+        setSelectedPlan(null);
+        setConfirmError('');
+      } else if (showProfileModal) {
+        setIsEditingProfile(false);
+        setShowProfileModal(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedPlan, showProfileModal]);
+
+
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -450,8 +486,10 @@ function BayOrderingClientScreen() {
       }
 
       router.push(`/orders/${created.reference}`);
+      // If the page did not change (a slow connection), let the button work again
+      setTimeout(() => setIsSubmitting(false), 8000);
     } catch (err: unknown) {
-      alert((err instanceof Error ? err.message : String(err)) || 'Error processing wash order');
+      setConfirmError((err instanceof Error ? err.message : String(err)) || t('genericAuthError'));
       setIsSubmitting(false);
     }
   };
@@ -671,6 +709,8 @@ function BayOrderingClientScreen() {
                           type="text"
                           autoFocus
                           required
+                          maxLength={80}
+                          autoComplete="name"
                           placeholder={t('fullNamePlaceholder')}
                           value={employeeName}
                           onChange={(e) => {
@@ -713,11 +753,15 @@ function BayOrderingClientScreen() {
                     <div className="relative flex-1">
                       <input
                         type="tel"
+                        inputMode="numeric"
+                        autoComplete="tel-national"
+                        maxLength={14}
                         autoFocus={authMode === 'LOGIN'}
                         placeholder={t('phoneInputPlaceholder')}
                         value={employeePhone}
                         onChange={(e) => {
-                          setEmployeePhone(e.target.value);
+                          // Digits only; a pasted +974 number is cut down to the 8 digits the server reads
+                          setEmployeePhone(e.target.value.replace(/D/g, '').slice(0, 14));
                           setPhoneError('');
                         }}
                         className={`${fieldCls} tabular-nums ps-11`}
@@ -727,21 +771,9 @@ function BayOrderingClientScreen() {
                   </div>
 
                   {phoneError ? (
-                    <div className="mt-3 space-y-1.5">
-                      <p className="text-sm text-rose-400 leading-relaxed">{phoneError}</p>
-                      {authMode === 'LOGIN' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAuthMode('SIGNUP');
-                            setPhoneError('');
-                          }}
-                          className="text-sm text-link font-medium hover:underline"
-                        >
-                          {t('switchToSignUp')}
-                        </button>
-                      )}
-                    </div>
+                    <p role="alert" className="mt-3 text-sm text-rose-400 leading-relaxed">
+                      {phoneError}
+                    </p>
                   ) : (
                     <p className="text-sm text-dim mt-3 leading-relaxed">{t('phoneInputHint')}</p>
                   )}
@@ -1190,26 +1222,31 @@ function BayOrderingClientScreen() {
               <section className={`${tile} p-6 space-y-4`}>
                 <div>
                   <label className="text-sm text-muted block mb-1.5">{t('fullNameLabel')}</label>
-                  <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className={fieldCls} />
+                  <input type="text" value={editName} maxLength={80} onChange={(e) => setEditName(e.target.value)} className={fieldCls} />
                 </div>
                 <div>
                   <label className="text-sm text-muted block mb-1.5">{t('qatarPhoneLabel')}</label>
-                  <input type="tel" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className={`${fieldCls} tabular-nums`} />
+                  <input type="tel" inputMode="tel" value={editPhone} maxLength={20} onChange={(e) => setEditPhone(e.target.value)} className={`${fieldCls} tabular-nums`} />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-sm text-muted block mb-1.5">{t('plateNumberLabelShort')}</label>
-                    <input type="text" value={editPlate} onChange={(e) => setEditPlate(e.target.value)} className={`${fieldCls} tabular-nums`} />
+                    <input type="text" value={editPlate} maxLength={20} onChange={(e) => setEditPlate(e.target.value)} className={`${fieldCls} tabular-nums`} />
                   </div>
                   <div>
                     <label className="text-sm text-muted block mb-1.5">{t('colorLabel')}</label>
-                    <input type="text" value={editColor} onChange={(e) => setEditColor(e.target.value)} className={fieldCls} />
+                    <input type="text" value={editColor} maxLength={40} onChange={(e) => setEditColor(e.target.value)} className={fieldCls} />
                   </div>
                 </div>
                 <div>
                   <label className="text-sm text-muted block mb-1.5">{t('vehicleMake')}</label>
-                  <input type="text" value={editMakeModel} onChange={(e) => setEditMakeModel(e.target.value)} className={fieldCls} />
+                  <input type="text" value={editMakeModel} maxLength={80} onChange={(e) => setEditMakeModel(e.target.value)} className={fieldCls} />
                 </div>
+                {profileError && (
+                  <p role="alert" className="text-sm text-rose-300">
+                    {profileError}
+                  </p>
+                )}
                 <div className="flex items-center gap-3 pt-1">
                   <button onClick={handleSaveProfile} className={`${primaryBtn} flex-1 py-3`}>
                     <Check className="h-4 w-4" />
@@ -1367,21 +1404,23 @@ function BayOrderingClientScreen() {
                 </Link>
 
                 {/* Support and sign out */}
-                <div className="grid grid-cols-2 gap-3">
-                  <a
-                    href="https://wa.me/97455128901?text=Hello%20TripleA%20Concierge"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={`${softBtn} py-3`}
-                  >
-                    <MessageSquare className="h-4 w-4" />
-                    <span>{t('contactWhatsApp')}</span>
-                  </a>
-                  <a href="tel:+97455128901" className={`${softBtn} py-3`}>
-                    <Phone className="h-4 w-4" />
-                    <span>{t('callConcierge')}</span>
-                  </a>
-                </div>
+                {SUPPORT_PHONE && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <a
+                      href={`https://wa.me/${SUPPORT_PHONE}?text=Hello%20TripleA`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${softBtn} py-3`}
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      <span>{t('contactWhatsApp')}</span>
+                    </a>
+                    <a href={`tel:+${SUPPORT_PHONE}`} className={`${softBtn} py-3`}>
+                      <Phone className="h-4 w-4" />
+                      <span>{t('callConcierge')}</span>
+                    </a>
+                  </div>
+                )}
 
                 <button
                   onClick={handleSignOut}
@@ -1531,6 +1570,7 @@ function BayOrderingClientScreen() {
                   type="text"
                   placeholder={t('instructionsPlaceholder')}
                   value={notes}
+                  maxLength={500}
                   onChange={(e) => setNotes(e.target.value)}
                   className={fieldCls}
                 />
