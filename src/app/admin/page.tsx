@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   RotateCw,
   Layers,
+  ChevronLeft,
   Users,
   CreditCard,
   TrendingUp,
@@ -70,6 +71,13 @@ export default function AdminDashboardPage() {
 
   // Selected Order for Execution Console
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  // On a phone or tablet the queue and the order are two screens: this says the order is open
+  const [mobileDetail, setMobileDetail] = useState(false);
+  const openOrder = (id: string) => {
+    setSelectedOrderId(id);
+    setMobileDetail(true);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
 
   // Action Inputs for Order Execution
   const [, setAssigneeId] = useState('');
@@ -531,12 +539,12 @@ export default function AdminDashboardPage() {
   const chipBtn =
     'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition cursor-pointer';
 
-  const navItems: { key: AdminTab; label: string; icon: React.ReactNode; count: number | null; hot?: boolean }[] = [
-    { key: 'DISPATCH', label: 'Dispatch Queue', icon: <Layers className="h-[18px] w-[18px]" />, count: metrics.newQueue > 0 ? metrics.newQueue : null, hot: true },
-    { key: 'CLIENTS', label: 'Clients & Registry', icon: <Users className="h-[18px] w-[18px]" />, count: metrics.totalClients },
-    { key: 'SUBSCRIPTIONS', label: '140 QAR Passes', icon: <CreditCard className="h-[18px] w-[18px]" />, count: metrics.activeSubscribers },
-    { key: 'BAYS', label: 'Tower Bays', icon: <MapPin className="h-[18px] w-[18px]" />, count: null },
-    { key: 'INSIGHTS', label: 'Analytics', icon: <TrendingUp className="h-[18px] w-[18px]" />, count: null },
+  const navItems: { key: AdminTab; label: string; short: string; icon: React.ReactNode; count: number | null; hot?: boolean }[] = [
+    { key: 'DISPATCH', label: 'Dispatch Queue', short: 'Dispatch', icon: <Layers className="h-[18px] w-[18px]" />, count: metrics.newQueue > 0 ? metrics.newQueue : null, hot: true },
+    { key: 'CLIENTS', label: 'Clients & Registry', short: 'Clients', icon: <Users className="h-[18px] w-[18px]" />, count: metrics.totalClients },
+    { key: 'SUBSCRIPTIONS', label: '140 QAR Passes', short: 'Passes', icon: <CreditCard className="h-[18px] w-[18px]" />, count: metrics.activeSubscribers },
+    { key: 'BAYS', label: 'Tower Bays', short: 'Bays', icon: <MapPin className="h-[18px] w-[18px]" />, count: null },
+    { key: 'INSIGHTS', label: 'Analytics', short: 'Insights', icon: <TrendingUp className="h-[18px] w-[18px]" />, count: null },
   ];
   const activeNav = navItems.find((n) => n.key === activeTab) || navItems[0];
 
@@ -817,10 +825,10 @@ export default function AdminDashboardPage() {
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex bg-canvas text-body font-sans antialiased">
+    <div className="min-h-[100dvh] w-full md:h-screen md:overflow-hidden flex flex-col md:flex-row bg-canvas text-body font-sans antialiased">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-6 end-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-full bg-raised text-ink text-sm animate-in fade-in slide-in-from-bottom-2 duration-150">
+        <div className="fixed bottom-24 md:bottom-6 end-4 md:end-6 z-[60] flex items-center gap-2 px-4 py-2.5 rounded-full bg-raised text-ink text-sm animate-in fade-in slide-in-from-bottom-2 duration-150">
           <CheckCircle2 className="h-4 w-4 text-emerald-400 flex-shrink-0" />
           <span>{toastMessage}</span>
         </div>
@@ -829,7 +837,7 @@ export default function AdminDashboardPage() {
       {/* ---------------------------------------------------------------------- */}
       {/* SIDEBAR                                                                */}
       {/* ---------------------------------------------------------------------- */}
-      <aside className="w-[76px] lg:w-[256px] flex-shrink-0 bg-sidebar flex flex-col py-5 px-3 lg:px-4">
+      <aside className="hidden md:flex w-[76px] lg:w-[256px] flex-shrink-0 bg-sidebar flex-col py-5 px-3 lg:px-4">
         <Link href="/admin" className="flex items-center gap-3 px-2 mb-8">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/triplea-shield.png" alt="TripleA" className="w-9 h-9 object-contain flex-shrink-0" />
@@ -897,35 +905,69 @@ export default function AdminDashboardPage() {
         </div>
       </aside>
 
+
+      {/* ---------------------------------------------------------------------- */}
+      {/* BOTTOM NAVIGATION (phones)                                             */}
+      {/* ---------------------------------------------------------------------- */}
+      <nav className="md:hidden fixed inset-x-0 bottom-0 z-50 bg-sidebar flex justify-around px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        {navItems.map((item) => {
+          const active = activeTab === item.key;
+          return (
+            <button
+              key={item.key}
+              onClick={() => {
+                setActiveTab(item.key);
+                setMobileDetail(false);
+                window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+              }}
+              aria-label={item.label}
+              className={`relative flex flex-1 flex-col items-center gap-1 py-1.5 rounded-xl text-[11px] cursor-pointer ${
+                active ? 'text-link' : 'text-muted'
+              }`}
+            >
+              <span className="relative">
+                {item.icon}
+                {item.hot && item.count ? (
+                  <span className="absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full bg-amber-400 text-black text-[10px] font-semibold flex items-center justify-center tabular-nums">
+                    {item.count}
+                  </span>
+                ) : null}
+              </span>
+              <span className="truncate max-w-full">{item.short}</span>
+            </button>
+          );
+        })}
+      </nav>
+
       {/* ---------------------------------------------------------------------- */}
       {/* MAIN                                                                   */}
       {/* ---------------------------------------------------------------------- */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col pb-[84px] md:pb-0">
         {/* Page header */}
-        <header className="flex-shrink-0 flex items-center justify-between gap-4 px-8 pt-6 pb-4">
+        <header className="flex-shrink-0 flex items-center justify-between gap-3 px-4 md:px-8 pt-4 md:pt-6 pb-3 md:pb-4">
           <div className="min-w-0">
             <h1 className="text-[22px] font-semibold text-ink tracking-tight leading-tight truncate">{activeNav.label}</h1>
-            <p className="text-sm text-dim mt-0.5">Lusail Towers Parking · {TOTAL_BAYS.toLocaleString()} bays</p>
+            <p className="hidden sm:block text-sm text-dim mt-0.5">Lusail Towers Parking · {TOTAL_BAYS.toLocaleString()} bays</p>
           </div>
 
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <span className="inline-flex items-center gap-2 text-sm text-emerald-300 bg-emerald-400/10 px-3 py-1.5 rounded-full whitespace-nowrap">
+          <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
+            <span className="inline-flex items-center gap-2 text-sm text-emerald-300 bg-emerald-400/10 px-2.5 md:px-3 py-1.5 rounded-full whitespace-nowrap" title="Live · Supabase">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Live · Supabase
+              <span className="hidden sm:inline">Live · Supabase</span>
             </span>
-            <span className="text-sm text-dim tabular-nums whitespace-nowrap">
+            <span className="hidden lg:inline text-sm text-dim tabular-nums whitespace-nowrap">
               {lastSyncTime
                 ? lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 : 'Syncing'}
             </span>
             <button
               onClick={() => setSearchOpen(true)}
-              className="hidden md:flex items-center gap-2 h-9 px-4 rounded-full bg-tile hover:bg-raised text-sm text-muted hover:text-ink transition"
+              className="flex items-center justify-center gap-2 h-9 w-9 md:w-auto md:px-4 rounded-full bg-tile hover:bg-raised text-sm text-muted hover:text-ink transition"
               aria-label="Search everything"
             >
               <Search className="h-4 w-4" />
-              <span>Search</span>
-              <kbd className="text-xs text-dim">Ctrl K</kbd>
+              <span className="hidden md:inline">Search</span>
+              <kbd className="hidden md:inline text-xs text-dim">Ctrl K</kbd>
             </button>
             <ThemeToggle />
             <button
@@ -937,13 +979,28 @@ export default function AdminDashboardPage() {
             >
               <RotateCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
             </button>
+            {getSupabase() && (
+              <button
+                onClick={handleSignOut}
+                className="md:hidden w-9 h-9 rounded-full bg-tile text-body flex items-center justify-center"
+                aria-label="Sign out"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </header>
 
         {/* Key numbers */}
-        <div className="flex-shrink-0 px-8 pb-5 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div
+          className={`flex-shrink-0 px-4 md:px-8 pb-4 md:pb-5 gap-3 ${
+            mobileDetail && activeTab === 'DISPATCH'
+              ? 'hidden min-[1360px]:grid min-[1360px]:grid-cols-6'
+              : 'flex overflow-x-auto md:overflow-visible md:grid md:grid-cols-3 xl:grid-cols-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+          }`}
+        >
           {kpis.map((k) => (
-            <div key={k.label} className="rounded-2xl bg-tile px-4 py-3">
+            <div key={k.label} className="rounded-2xl bg-tile px-4 py-3 min-w-[136px] flex-shrink-0 md:min-w-0">
               <div className="flex items-center gap-2 text-sm text-muted">
                 {k.dot && <span className={`w-1.5 h-1.5 rounded-full ${k.dot}`} />}
                 <span className="truncate">{k.label}</span>
@@ -956,14 +1013,14 @@ export default function AdminDashboardPage() {
           ))}
         </div>
 
-        <main className="flex-1 min-h-0 overflow-hidden">
+        <main className="md:flex-1 md:min-h-0 md:overflow-hidden">
           {/* ================================================================== */}
           {/* DISPATCH                                                           */}
           {/* ================================================================== */}
           {activeTab === 'DISPATCH' && (
-            <div className="h-full flex gap-5 px-8 pb-6">
+            <div className="md:h-full flex gap-5 px-4 md:px-8 pb-6">
               {/* Queue */}
-              <aside className="w-[360px] xl:w-[420px] flex-shrink-0 flex flex-col min-h-0">
+              <aside className={`${mobileDetail ? 'hidden min-[1360px]:flex' : 'flex'} w-full min-[1360px]:w-[380px] 2xl:w-[420px] flex-shrink-0 flex-col min-h-0`}>
                 <div className="flex items-center gap-2 flex-shrink-0 bg-tile rounded-full px-4 py-2.5 text-sm text-ink mb-3">
                   <Search className="h-4 w-4 text-dim flex-shrink-0" />
                   <input
@@ -1019,9 +1076,11 @@ export default function AdminDashboardPage() {
                       return (
                         <div
                           key={ord.id}
-                          onClick={() => setSelectedOrderId(ord.id)}
+                          onClick={() => openOrder(ord.id)}
                           className={`p-4 rounded-2xl cursor-pointer transition flex items-start gap-3 ${
-                            isSelected ? 'bg-raised ring-2 ring-[#2997ff]' : 'bg-tile hover:bg-tile-hover'
+                            isSelected
+                              ? 'bg-tile min-[1360px]:bg-raised min-[1360px]:ring-2 min-[1360px]:ring-[#2997ff]'
+                              : 'bg-tile hover:bg-tile-hover'
                           }`}
                         >
                           <div className="w-12 h-12 rounded-xl bg-fill flex flex-col items-center justify-center flex-shrink-0 tabular-nums">
@@ -1057,11 +1116,18 @@ export default function AdminDashboardPage() {
               </aside>
 
               {/* Order console */}
-              <section className="flex-1 min-w-0 overflow-y-auto pe-1">
+              <section className={`${mobileDetail ? 'block' : 'hidden min-[1360px]:block'} flex-1 min-w-0 md:overflow-y-auto pe-1`}>
                 {selectedOrder ? (
                   <div className="max-w-[980px] space-y-4">
+                    <button
+                      onClick={() => setMobileDetail(false)}
+                      className="min-[1360px]:hidden flex items-center gap-1.5 text-sm text-link py-1 cursor-pointer"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      <span>Back to the queue</span>
+                    </button>
                     {/* Order header */}
-                    <div className={`${card} p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4`}>
+                    <div className={`${card} p-4 md:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4`}>
                       <div className="space-y-2 min-w-0">
                         <div className="flex items-center gap-3 flex-wrap">
                           <h2 className="text-[24px] leading-none font-semibold text-ink tracking-tight tabular-nums">
@@ -1102,7 +1168,7 @@ export default function AdminDashboardPage() {
                     />
 
                     {/* Progression */}
-                    <div className={`${card} p-6 space-y-5`}>
+                    <div className={`${card} p-4 md:p-6 space-y-5`}>
                       <div className="flex flex-col 2xl:flex-row 2xl:items-center justify-between gap-2">
                         <div className="flex items-center gap-3 flex-wrap">
                           <h3 className="text-base font-semibold text-ink tracking-tight">Order Progression Deck</h3>
@@ -1228,7 +1294,7 @@ export default function AdminDashboardPage() {
                     <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
                       <div className="xl:col-span-3 space-y-4">
                         {/* Customer */}
-                        <div className={`${card} p-6 space-y-4`}>
+                        <div className={`${card} p-4 md:p-6 space-y-4`}>
                           <div className="flex items-center justify-between">
                             <h3 className="text-base font-semibold text-ink">Customer Profile</h3>
                             <span className="text-xs text-emerald-300 bg-emerald-400/10 px-2.5 py-1 rounded-full">Verified Corporate</span>
@@ -1266,7 +1332,7 @@ export default function AdminDashboardPage() {
                         </div>
 
                         {/* Vehicle */}
-                        <div className={`${card} p-6 space-y-4`}>
+                        <div className={`${card} p-4 md:p-6 space-y-4`}>
                           <h3 className="text-base font-semibold text-ink">Vehicle &amp; Package Details</h3>
                           <dl className="grid grid-cols-2 gap-3">
                             <div className="rounded-2xl bg-inset p-4">
@@ -1407,7 +1473,7 @@ export default function AdminDashboardPage() {
 
                     {/* Audit trail */}
                     {selectedOrderEvents.length > 0 && (
-                      <div className={`${card} p-6 space-y-4`}>
+                      <div className={`${card} p-4 md:p-6 space-y-4`}>
                         <h3 className="text-base font-semibold text-ink">Lifecycle Audit Trail</h3>
                         <ol className="space-y-3">
                           {selectedOrderEvents.map((ev) => (
@@ -1438,7 +1504,7 @@ export default function AdminDashboardPage() {
           {/* CLIENTS                                                            */}
           {/* ================================================================== */}
           {activeTab === 'CLIENTS' && (
-            <div className="h-full overflow-y-auto px-8 pb-10">
+            <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
               <div className="max-w-[1200px] space-y-4">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-2 flex-1 min-w-[280px] bg-tile rounded-full px-4 py-2.5">
@@ -1607,9 +1673,9 @@ export default function AdminDashboardPage() {
           {/* SUBSCRIPTIONS                                                      */}
           {/* ================================================================== */}
           {activeTab === 'SUBSCRIPTIONS' && (
-            <div className="h-full overflow-y-auto px-8 pb-10">
+            <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
               <div className="max-w-[1200px] space-y-4">
-                <div className={`${card} p-6 flex flex-col md:flex-row md:items-center justify-between gap-5`}>
+                <div className={`${card} p-4 md:p-6 flex flex-col md:flex-row md:items-center justify-between gap-5`}>
                   <div>
                     <h3 className="text-base font-semibold text-ink tracking-tight">Corporate Pass Management (140 QAR)</h3>
                     <p className="text-sm text-dim mt-1">
@@ -1707,9 +1773,9 @@ export default function AdminDashboardPage() {
           {/* BAYS                                                               */}
           {/* ================================================================== */}
           {activeTab === 'BAYS' && (
-            <div className="h-full overflow-y-auto px-8 pb-10">
+            <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
               <div className="max-w-[1200px] space-y-4">
-                <div className={`${card} p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5`}>
+                <div className={`${card} p-4 md:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5`}>
                   <div>
                     <h3 className="text-base font-semibold text-ink tracking-tight">
                       Lusail Tower Parking Bays (1 to {TOTAL_BAYS.toLocaleString()})
@@ -1779,7 +1845,7 @@ export default function AdminDashboardPage() {
                           key={code}
                           onClick={() => {
                             if (activeBayOrder) {
-                              setSelectedOrderId(activeBayOrder.id);
+                              openOrder(activeBayOrder.id);
                               setActiveTab('DISPATCH');
                             }
                           }}
@@ -1820,10 +1886,10 @@ export default function AdminDashboardPage() {
           {/* INSIGHTS                                                           */}
           {/* ================================================================== */}
           {activeTab === 'INSIGHTS' && (
-            <div className="h-full overflow-y-auto px-8 pb-10">
+            <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
               <div className="max-w-[1200px] space-y-4">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                  <div className={`${card} p-6 space-y-4`}>
+                  <div className={`${card} p-4 md:p-6 space-y-4`}>
                     <h3 className="text-base font-semibold text-ink">Revenue Streams</h3>
                     <div className="space-y-3 text-sm">
                       <div className="flex justify-between">
@@ -1843,7 +1909,7 @@ export default function AdminDashboardPage() {
                     </div>
                   </div>
 
-                  <div className={`${card} p-6 space-y-4`}>
+                  <div className={`${card} p-4 md:p-6 space-y-4`}>
                     <h3 className="text-base font-semibold text-ink">Operational SLA</h3>
                     <div className="space-y-3 text-sm">
                       <div className="flex justify-between">
@@ -1863,7 +1929,7 @@ export default function AdminDashboardPage() {
                     </div>
                   </div>
 
-                  <div className={`${card} p-6 space-y-4`}>
+                  <div className={`${card} p-4 md:p-6 space-y-4`}>
                     <h3 className="text-base font-semibold text-ink">Ministry Partnership ROI</h3>
                     <div className="space-y-3 text-sm">
                       <div className="flex justify-between">
@@ -1885,7 +1951,7 @@ export default function AdminDashboardPage() {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                  <div className={`${card} p-6 space-y-4 lg:col-span-2`}>
+                  <div className={`${card} p-4 md:p-6 space-y-4 lg:col-span-2`}>
                     <div className="flex items-center justify-between">
                       <h3 className="text-base font-semibold text-ink">Revenue, last 7 days</h3>
                       <span className="text-sm text-dim tabular-nums">
@@ -1907,7 +1973,7 @@ export default function AdminDashboardPage() {
                     </div>
                   </div>
 
-                  <div className={`${card} p-6 space-y-4`}>
+                  <div className={`${card} p-4 md:p-6 space-y-4`}>
                     <h3 className="text-base font-semibold text-ink">Orders by status</h3>
                     {statusMix.length === 0 ? (
                       <p className="text-sm text-dim">No orders yet.</p>
@@ -1924,7 +1990,7 @@ export default function AdminDashboardPage() {
                   </div>
                 </div>
 
-                <div className={`${card} p-6 space-y-4`}>
+                <div className={`${card} p-4 md:p-6 space-y-4`}>
                   <h3 className="text-base font-semibold text-ink">TripleA Team</h3>
                   <div className="p-4 rounded-2xl bg-inset flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3 min-w-0">
@@ -2019,7 +2085,7 @@ export default function AdminDashboardPage() {
                   <button
                     key={o.id}
                     onClick={() => {
-                      setSelectedOrderId(o.id);
+                      openOrder(o.id);
                       setActiveTab('DISPATCH');
                       setClientPanelId(null);
                     }}
@@ -2144,7 +2210,7 @@ export default function AdminDashboardPage() {
                     <button
                       key={o.id}
                       onClick={() => {
-                        setSelectedOrderId(o.id);
+                        openOrder(o.id);
                         setActiveTab('DISPATCH');
                         setSearchQuery('');
                         setStatusFilter('ALL');
