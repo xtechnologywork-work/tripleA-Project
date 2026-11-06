@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bell, BellRing, CheckCircle2, Sparkles, Car, ShieldAlert } from 'lucide-react';
+import { Bell, BellOff, CheckCircle2 } from 'lucide-react';
 import { mockStore } from '@/data/mock/store';
 import { STATUS_META } from '@/domain/status-machine';
 import { AR_CUSTOMER_LABELS } from '@/components/ui/status-badge';
@@ -11,48 +11,83 @@ type Perm = 'checking' | 'default' | 'granted' | 'denied' | 'unsupported';
 
 const COPY = {
   en: {
-    title: 'Turn on notifications',
-    lead: 'We tell you the moment something happens to your car. Without this you would have to keep checking the app.',
-    b1: 'Team assigned to your car',
-    b2: 'Your car is being washed',
-    b3: 'Ready in your bay, with the bay number',
+    title: 'Know when your car is ready.',
+    lead: 'Turn on notifications and we will tell you when the team starts the wash, and when your car is parked back in its bay.',
     enable: 'Turn on notifications',
-    required: 'Required to use the service',
-    deniedTitle: 'Notifications are blocked',
-    deniedLead: 'Open your browser settings for this site and set Notifications to Allow. Then come back and tap the button.',
-    s1: 'Tap the lock icon next to the address bar',
-    s2: 'Open Site settings, then Notifications',
-    s3: 'Choose Allow',
+    required: 'Needed to use the service.',
+    deniedTitle: 'Notifications are blocked.',
+    deniedLead: 'Allow them in your browser settings for this site, then come back.',
+    s1: 'Tap the lock icon next to the address bar.',
+    s2: 'Open Site settings, then Notifications.',
+    s3: 'Choose Allow.',
     recheck: 'I turned it on',
-    unsupportedTitle: 'Notifications are not available here',
-    unsupportedLead: 'This browser cannot show notifications. On iPhone, add TripleA to your Home Screen from the Share menu, then open it from there.',
-    cont: 'Continue anyway',
+    unsupportedTitle: 'This browser cannot show notifications.',
+    unsupportedLead: 'On iPhone, add TripleA to your Home Screen from the Share menu, then open it from there.',
+    cont: 'Continue without',
     readyTitle: 'Notifications are on',
     readyBody: 'You will be told when your car is washed and ready.',
-    open: 'Open order',
+    now: 'now',
+    p1: 'Team assigned to your car',
+    p2: 'Your car is being washed',
+    p3: 'Ready in your bay',
   },
   ar: {
-    title: 'فعّل الإشعارات',
-    lead: 'نخبرك لحظة حدوث أي شيء لسيارتك. بدونها ستضطر لفتح التطبيق باستمرار.',
-    b1: 'تعيين الفريق لسيارتك',
-    b2: 'بدء غسيل سيارتك',
-    b3: 'السيارة جاهزة في موقفها مع رقم الموقف',
+    title: 'اعرف متى تصبح سيارتك جاهزة.',
+    lead: 'فعّل الإشعارات لنخبرك عندما يبدأ الفريق الغسيل، وعندما تعود سيارتك إلى موقفها.',
     enable: 'تفعيل الإشعارات',
-    required: 'مطلوب لاستخدام الخدمة',
-    deniedTitle: 'الإشعارات محظورة',
-    deniedLead: 'افتح إعدادات المتصفح لهذا الموقع واجعل الإشعارات على السماح. ثم ارجع واضغط الزر.',
-    s1: 'اضغط على أيقونة القفل بجانب شريط العنوان',
-    s2: 'افتح إعدادات الموقع ثم الإشعارات',
-    s3: 'اختر السماح',
+    required: 'مطلوب لاستخدام الخدمة.',
+    deniedTitle: 'الإشعارات محظورة.',
+    deniedLead: 'اسمح بها من إعدادات المتصفح لهذا الموقع، ثم ارجع.',
+    s1: 'اضغط على أيقونة القفل بجانب شريط العنوان.',
+    s2: 'افتح إعدادات الموقع ثم الإشعارات.',
+    s3: 'اختر السماح.',
     recheck: 'قمت بتفعيلها',
-    unsupportedTitle: 'الإشعارات غير متاحة هنا',
-    unsupportedLead: 'هذا المتصفح لا يدعم الإشعارات. على الآيفون أضف TripleA إلى الشاشة الرئيسية من قائمة المشاركة ثم افتحه منها.',
-    cont: 'المتابعة على أي حال',
+    unsupportedTitle: 'هذا المتصفح لا يدعم الإشعارات.',
+    unsupportedLead: 'على الآيفون أضف TripleA إلى الشاشة الرئيسية من قائمة المشاركة، ثم افتحه منها.',
+    cont: 'المتابعة بدونها',
     readyTitle: 'الإشعارات مفعّلة',
     readyBody: 'سنخبرك عند غسل سيارتك وجاهزيتها.',
-    open: 'فتح الطلب',
+    now: 'الآن',
+    p1: 'تم تعيين الفريق لسيارتك',
+    p2: 'جاري غسل سيارتك',
+    p3: 'سيارتك جاهزة في موقفها',
   },
 } as const;
+
+/** A sample of what the notification will look like, cycling through the three moments that matter. */
+function NotificationPreview({ c, bay }: { c: (typeof COPY)['en'] | (typeof COPY)['ar']; bay: string }) {
+  const steps = [c.p1, c.p2, `${c.p3} · ${bay}`];
+  const [i, setI] = useState(2);
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the loop starts from the first moment
+    setI(0);
+    const id = setInterval(() => setI((n) => (n + 1) % 3), 2600);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div className="relative mx-auto h-[72px] w-full max-w-[340px]" aria-hidden="true">
+      {steps.map((text, n) => (
+        <div
+          key={text}
+          className={`absolute inset-0 flex items-center gap-3 rounded-[20px] bg-raised px-3.5 text-start transition duration-500 ease-out ${
+            n === i ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0'
+          }`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/images/triplea-shield.png" alt="" className="h-10 w-10 shrink-0 rounded-[10px] bg-black object-contain p-1" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-[13px] font-semibold text-ink">TripleA</span>
+              <span className="text-xs text-dim">{c.now}</span>
+            </div>
+            <div className="truncate text-[14px] text-muted">{text}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 async function showSystemNotification(title: string, body: string, tag: string, url: string) {
   try {
@@ -168,11 +203,14 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
     return mockStore.subscribe(check);
   }, [perm, employeeId]);
 
+  const bayHint = mockStore.getEmployeeOrders(employeeId)[0]?.bayCodeSnapshot || '34';
   const blocking = perm === 'default' || perm === 'denied' || (perm === 'unsupported' && !skipped);
   if (perm === 'checking' || (!blocking && !justOn)) return null;
 
   const isDenied = perm === 'denied';
   const isUnsupported = perm === 'unsupported';
+  const primary =
+    'w-full rounded-full bg-[#0071e3] py-3.5 text-[17px] font-normal text-white transition hover:bg-[#0077ed] active:scale-95 cursor-pointer';
 
   return (
     <div
@@ -180,94 +218,63 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="notif-title"
-      className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-scrim backdrop-blur-md px-4 pb-4 sm:pb-0"
+      className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-scrim backdrop-blur-sm"
       data-theme="dark"
     >
-      <div className="w-full max-w-[400px] rounded-[28px] bg-tile p-7 text-center shadow-2xl">
+      <div className="w-full sm:max-w-[420px] rounded-t-[28px] sm:rounded-[28px] bg-tile px-7 pt-12 pb-8 text-center">
         {justOn ? (
-          <div className="py-8 space-y-4">
-            <CheckCircle2 className="mx-auto h-14 w-14 text-emerald-400" />
-            <h2 className="text-[20px] font-semibold text-ink">{c.readyTitle}</h2>
+          <div className="py-10 space-y-5">
+            <CheckCircle2 className="mx-auto h-12 w-12 text-ink" strokeWidth={1.5} />
+            <h2 className="text-[28px] font-semibold leading-[1.1] tracking-[-0.02em] text-ink">{c.readyTitle}</h2>
           </div>
         ) : (
           <>
-            <div className="relative mx-auto mb-5 h-20 w-20">
-              {!isDenied && !isUnsupported && (
-                <>
-                  <span className="absolute inset-0 rounded-full bg-[#2997ff]/20 animate-ping" />
-                  <span className="absolute -inset-2 rounded-full bg-[#2997ff]/10" />
-                </>
-              )}
-              <div
-                className={`relative flex h-20 w-20 items-center justify-center rounded-full ${
-                  isDenied ? 'bg-rose-400/15 text-rose-300' : isUnsupported ? 'bg-fill text-dim' : 'bg-[#0071e3] text-white'
-                }`}
-              >
-                {isDenied ? <ShieldAlert className="h-9 w-9" /> : isUnsupported ? <Bell className="h-9 w-9" /> : <BellRing className="h-9 w-9" />}
-              </div>
-            </div>
+            {isDenied || isUnsupported ? (
+              <BellOff className="mx-auto h-12 w-12 text-dim" strokeWidth={1.5} />
+            ) : (
+              <Bell className="mx-auto h-12 w-12 text-ink" strokeWidth={1.5} />
+            )}
 
-            <h2 id="notif-title" className="text-[22px] font-semibold tracking-tight text-ink">
+            <h2
+              id="notif-title"
+              className="mt-6 text-[30px] font-semibold leading-[1.1] tracking-[-0.02em] text-ink text-balance"
+            >
               {isDenied ? c.deniedTitle : isUnsupported ? c.unsupportedTitle : c.title}
             </h2>
-            <p className="mt-2 text-[15px] leading-relaxed text-muted">
+            <p className="mx-auto mt-3 max-w-[340px] text-[17px] leading-[1.47] tracking-[-0.01em] text-muted">
               {isDenied ? c.deniedLead : isUnsupported ? c.unsupportedLead : c.lead}
             </p>
 
-            {!isUnsupported && !isDenied && (
-              <ul className="mt-6 space-y-2.5 text-start">
-                {[
-                  { icon: <Sparkles className="h-4 w-4" />, text: c.b1 },
-                  { icon: <Car className="h-4 w-4" />, text: c.b2 },
-                  { icon: <CheckCircle2 className="h-4 w-4" />, text: c.b3 },
-                ].map((row) => (
-                  <li key={row.text} className="flex items-center gap-3 rounded-2xl bg-inset px-4 py-3 text-[14px] text-ink">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#2997ff]/15 text-[#2997ff]">
-                      {row.icon}
-                    </span>
-                    {row.text}
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {isDenied && (
-              <ol className="mt-6 space-y-2.5 text-start">
+            {isDenied ? (
+              <ol className="mx-auto mt-7 max-w-[340px] space-y-3 text-start">
                 {[c.s1, c.s2, c.s3].map((step, i) => (
-                  <li key={step} className="flex items-center gap-3 rounded-2xl bg-inset px-4 py-3 text-[14px] text-ink">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-fill text-xs font-semibold tabular-nums">
-                      {i + 1}
-                    </span>
+                  <li key={step} className="flex items-baseline gap-3 text-[15px] text-ink">
+                    <span className="w-4 shrink-0 text-dim tabular-nums">{i + 1}</span>
                     {step}
                   </li>
                 ))}
               </ol>
-            )}
+            ) : !isUnsupported ? (
+              <div className="mt-8">
+                <NotificationPreview c={c} bay={bayHint} />
+              </div>
+            ) : null}
 
-            <div className="mt-7 space-y-2.5">
+            <div className="mt-9 space-y-3">
               {isUnsupported ? (
-                <button
-                  onClick={() => setSkipped(true)}
-                  className="w-full rounded-full bg-[#0071e3] py-3.5 text-[15px] font-semibold text-white transition hover:bg-[#0077ed] cursor-pointer"
-                >
+                <button onClick={() => setSkipped(true)} className={primary}>
                   {c.cont}
                 </button>
               ) : isDenied ? (
-                <button
-                  onClick={() => setPerm(readPerm())}
-                  className="w-full rounded-full bg-[#0071e3] py-3.5 text-[15px] font-semibold text-white transition hover:bg-[#0077ed] cursor-pointer"
-                >
+                <button onClick={() => setPerm(readPerm())} className={primary}>
                   {c.recheck}
                 </button>
               ) : (
                 <>
-                  <button
-                    onClick={enable}
-                    className="w-full rounded-full bg-[#0071e3] py-3.5 text-[15px] font-semibold text-white transition hover:bg-[#0077ed] cursor-pointer"
-                  >
+                  <button onClick={enable} className={primary}>
                     {c.enable}
                   </button>
-                  <p className="text-xs text-dim">{c.required}</p>
+                  <p className="text-[13px] text-dim">{c.required}</p>
                 </>
               )}
             </div>
