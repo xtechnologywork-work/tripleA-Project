@@ -1014,7 +1014,7 @@ async function validateEmployeeBatch(
     orderIds.size ? sb.from('orders').select('id,employee_id,status,credits_used,payment_mode,price_snapshot,bay_code_snapshot,service_id').in('id', Array.from(orderIds)) : Promise.resolve({ data: [] as Row[] }),
     sb.from('credit_ledger').select('id,order_id,amount,type,details').eq('employee_id', me),
     sb.from('employee_subscriptions').select('id,status').eq('employee_id', me),
-    sb.from('services').select('price_minor').order('sort_order', { ascending: true }).limit(1),
+    sb.from('services').select('price_minor'),
     sb.from('subscription_packages').select('id,price_minor'),
     sb.from('employees').select('*').eq('id', me).limit(1),
   ]);
@@ -1023,11 +1023,11 @@ async function validateEmployeeBatch(
   const ledger = (ledgerRes.data || []) as Row[];
   const ledgerIds = new Set(ledger.map((r) => String(r.id)));
   const dbSubs = (subsRes.data || []) as Row[];
-  const servicePrice = Number((svcRes.data || [])[0]?.price_minor || 2000);
+  const servicePrices = new Set<number>(((svcRes.data || []) as Row[]).map((r) => Number(r.price_minor)));
+  if (servicePrices.size === 0) servicePrices.add(2000);
   const packages = (pkgRes.data || []) as Row[];
-  const packagePrice = Number(packages[0]?.price_minor || 14000);
+  const packagePrices = new Set<number>(packages.map((r) => Number(r.price_minor)));
   const myRow = (meRes.data || [])[0] as Row | undefined;
-  const allowedPrices = new Set([servicePrice, packagePrice]);
 
   // Rows that already exist under another account can never be overwritten
   const takenBy = async (table: string, ids: string[], ownerCol: string | null): Promise<Map<string, string>> => {
@@ -1101,7 +1101,10 @@ async function validateEmployeeBatch(
       const bay = Number(o.bayCodeSnapshot);
       if (o.status !== 'NEW') errors.push(`order ${o.reference}: a new order must start as NEW`);
       if (!Number.isInteger(bay) || bay < 1 || bay > TOTAL_BAYS) errors.push(`order ${o.reference}: bay must be 1 to ${TOTAL_BAYS}`);
-      if (!allowedPrices.has(Number(o.priceSnapshot?.amountMinor))) errors.push(`order ${o.reference}: price does not match`);
+      // A paid wash costs a service price; the first wash of a new pass is booked at the pass price
+      const amount = Number(o.priceSnapshot?.amountMinor);
+      const priceOk = servicePrices.has(amount) || (o.paymentMode === 'CREDIT' && packagePrices.has(amount));
+      if (!priceOk) errors.push(`order ${o.reference}: price does not match`);
       if (!['ONE_TIME', 'CREDIT'].includes(o.paymentMode)) errors.push(`order ${o.reference}: payment mode is not valid`);
       if (!(o.creditsUsed >= 0 && o.creditsUsed <= 1)) errors.push(`order ${o.reference}: credits used is not valid`);
       if ((o.instructions || '').length > 500) errors.push(`order ${o.reference}: notes are too long`);
