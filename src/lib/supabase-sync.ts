@@ -1,5 +1,7 @@
-import { getSupabase } from './supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { getServerSupabase, hasServiceKey } from './supabase-server';
 import { MockDatabase, TOTAL_BAYS } from '../data/mock/seed';
+import { isValidStaffTransition } from '../domain/status-machine';
 import {
   Employee,
   Vehicle,
@@ -13,10 +15,35 @@ import {
   OrderPhoto,
   OrderEvent,
   OrderStatus,
+  Issue,
+  AuditLog,
 } from '../domain/types';
 
+const PHOTO_BUCKET = 'order-photos';
+
+type Row = Record<string, unknown>;
+
+// -----------------------------------------------------------------------------
+// Schema detection: the new columns exist only after migration_v2_dashboard.sql.
+// Until then the app keeps working on the old columns.
+// -----------------------------------------------------------------------------
+let schemaV2: { ready: boolean; checkedAt: number } = { ready: false, checkedAt: 0 };
+
+export async function isSchemaV2(sb: SupabaseClient): Promise<boolean> {
+  const now = Date.now();
+  if (now - schemaV2.checkedAt < 30_000) return schemaV2.ready;
+  const probe = await sb.from('orders').select('cancellation').limit(1);
+  const ledgerProbe = await sb.from('credit_ledger').select('type').limit(1);
+  const issuesProbe = await sb.from('issues').select('id').limit(1);
+  schemaV2 = { ready: !probe.error && !ledgerProbe.error && !issuesProbe.error, checkedAt: now };
+  return schemaV2.ready;
+}
+
+// -----------------------------------------------------------------------------
+// READ: the whole operational state, assembled from the tables
+// -----------------------------------------------------------------------------
 export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version: number } | null> {
-  const sb = getSupabase();
+  const sb = getServerSupabase();
   if (!sb) return null;
 
   try {
@@ -32,6 +59,8 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       zonesRes,
       photosRes,
       eventsRes,
+      issuesRes,
+      auditRes,
     ] = await Promise.all([
       sb.from('employees').select('*').order('created_at', { ascending: false }),
       sb.from('vehicles').select('*'),
@@ -39,11 +68,13 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       sb.from('services').select('*'),
       sb.from('subscription_packages').select('*'),
       sb.from('employee_subscriptions').select('*'),
-      sb.from('credit_ledger').select('*'),
+      sb.from('credit_ledger').select('*').order('created_at', { ascending: true }),
       sb.from('field_team_members').select('*'),
       sb.from('parking_zones').select('*'),
       sb.from('order_photos').select('*'),
-      sb.from('order_events').select('*'),
+      sb.from('order_events').select('*').order('created_at', { ascending: true }),
+      sb.from('issues').select('*').order('created_at', { ascending: false }),
+      sb.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(300),
     ]);
 
     if (empsRes.error) {
@@ -51,7 +82,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       return null;
     }
 
-    const employees: Employee[] = (empsRes.data || []).map((e: Record<string, unknown>) => ({
+    const employees: Employee[] = (empsRes.data || []).map((e: Row) => ({
       id: String(e.id),
       employeeNo: e.employee_no ? String(e.employee_no) : undefined,
       fullName: String(e.full_name || ''),
@@ -63,7 +94,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       createdAt: e.created_at ? String(e.created_at) : new Date().toISOString(),
     }));
 
-    const vehicles: Vehicle[] = (vehsRes.data || []).map((v: Record<string, unknown>) => ({
+    const vehicles: Vehicle[] = (vehsRes.data || []).map((v: Row) => ({
       id: String(v.id),
       employeeId: String(v.employee_id),
       plateNumber: String(v.plate_number),
@@ -74,7 +105,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       isDefault: Boolean(v.is_default ?? true),
     }));
 
-    const orders: Order[] = (ordsRes.data || []).map((o: Record<string, unknown>) => ({
+    const orders: Order[] = (ordsRes.data || []).map((o: Row) => ({
       id: String(o.id),
       reference: String(o.reference),
       employeeId: String(o.employee_id),
@@ -90,16 +121,18 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       paymentStatus: (o.payment_status || 'NOT_APPLICABLE') as Order['paymentStatus'],
       instructions: o.instructions ? String(o.instructions) : undefined,
       status: (o.status || 'NEW') as Order['status'],
+      statusBeforeIssue: o.status_before_issue ? (String(o.status_before_issue) as OrderStatus) : undefined,
       assignment: o.assignment ? (o.assignment as Order['assignment']) : undefined,
       qualityCheck: o.quality_check ? (o.quality_check as Order['qualityCheck']) : undefined,
       returnConfirmation: o.return_confirmation ? (o.return_confirmation as Order['returnConfirmation']) : undefined,
+      cancellation: o.cancellation ? (o.cancellation as Order['cancellation']) : undefined,
       idempotencyKey: o.idempotency_key ? String(o.idempotency_key) : `idem-${o.id}`,
-      version: 1,
+      version: Number(o.version || 1),
       createdAt: String(o.created_at || new Date().toISOString()),
       updatedAt: String(o.updated_at || new Date().toISOString()),
     }));
 
-    const services: Service[] = (srvsRes.data || []).map((s: Record<string, unknown>) => ({
+    const services: Service[] = (srvsRes.data || []).map((s: Row) => ({
       id: String(s.id),
       name: String(s.name || ''),
       description: String(s.description || ''),
@@ -110,7 +143,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       sortOrder: Number(s.sort_order || 1),
     }));
 
-    const packages: SubscriptionPackage[] = (pkgsRes.data || []).map((p: Record<string, unknown>) => ({
+    const packages: SubscriptionPackage[] = (pkgsRes.data || []).map((p: Row) => ({
       id: String(p.id),
       name: String(p.name || ''),
       paidWashes: Number(p.paid_washes || 6),
@@ -121,7 +154,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       active: Boolean(p.active ?? true),
     }));
 
-    const subscriptions: EmployeeSubscription[] = (subsRes.data || []).map((sub: Record<string, unknown>) => ({
+    const subscriptions: EmployeeSubscription[] = (subsRes.data || []).map((sub: Row) => ({
       id: String(sub.id),
       employeeId: String(sub.employee_id),
       packageId: String(sub.package_id),
@@ -132,25 +165,28 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       activatedBy: sub.activated_by ? String(sub.activated_by) : undefined,
     }));
 
-    const credits: CreditLedgerEntry[] = (creditsRes.data || []).map((c: Record<string, unknown>) => ({
-      id: String(c.id),
-      employeeId: String(c.employee_id),
-      subscriptionId: c.subscription_id ? String(c.subscription_id) : undefined,
-      orderId: c.order_id ? String(c.order_id) : undefined,
-      type: (c.type || 'GRANT') as CreditLedgerEntry['type'],
-      delta: Number(c.delta || c.amount || 0),
-      reason: c.reason ? String(c.reason) : undefined,
-      actorId: String(c.actor_id || 'system'),
-      createdAt: String(c.created_at || new Date().toISOString()),
-    }));
+    const credits: CreditLedgerEntry[] = (creditsRes.data || []).map((c: Row) => {
+      const details = (c.details as Record<string, unknown> | null) || {};
+      return {
+        id: String(c.id),
+        employeeId: String(c.employee_id),
+        subscriptionId: c.subscription_id ? String(c.subscription_id) : undefined,
+        orderId: c.order_id ? String(c.order_id) : undefined,
+        type: (c.type || (Number(c.amount ?? c.delta ?? 0) < 0 ? 'DEBIT' : 'GRANT')) as CreditLedgerEntry['type'],
+        delta: Number(c.amount ?? c.delta ?? 0),
+        reason: c.reason ? String(c.reason) : details.reason ? String(details.reason) : undefined,
+        actorId: String(c.actor_id || details.actorId || 'system'),
+        createdAt: String(c.created_at || new Date().toISOString()),
+      };
+    });
 
-    const fieldMembers: FieldTeamMember[] = (membersRes.data || []).map((m: Record<string, unknown>) => ({
+    const fieldMembers: FieldTeamMember[] = (membersRes.data || []).map((m: Row) => ({
       id: String(m.id),
       displayName: String(m.display_name),
       active: Boolean(m.active ?? true),
     }));
 
-    const zones: ParkingZone[] = (zonesRes.data || []).map((z: Record<string, unknown>) => ({
+    const zones: ParkingZone[] = (zonesRes.data || []).map((z: Row) => ({
       id: String(z.id),
       code: String(z.code),
       name: String(z.name),
@@ -158,7 +194,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       active: Boolean(z.active ?? true),
     }));
 
-    const photos: OrderPhoto[] = (photosRes.data || []).map((p: Record<string, unknown>) => ({
+    const photos: OrderPhoto[] = (photosRes.data || []).map((p: Row) => ({
       id: String(p.id),
       orderId: String(p.order_id),
       kind: (p.kind || 'BEFORE') as OrderPhoto['kind'],
@@ -167,7 +203,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       createdAt: String(p.captured_at || p.createdAt || new Date().toISOString()),
     }));
 
-    const orderEvents: OrderEvent[] = (eventsRes.data || []).map((ev: Record<string, unknown>) => ({
+    const orderEvents: OrderEvent[] = (eventsRes.data || []).map((ev: Row) => ({
       id: String(ev.id),
       orderId: String(ev.order_id),
       from: ev.from_status ? (ev.from_status as OrderStatus) : undefined,
@@ -182,11 +218,32 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       createdAt: String(ev.created_at || new Date().toISOString()),
     }));
 
-    // Generate parking bays for the zones
+    const issues: Issue[] = (issuesRes.data || []).map((i: Row) => ({
+      id: String(i.id),
+      orderId: i.order_id ? String(i.order_id) : undefined,
+      category: (i.category || 'OTHER') as Issue['category'],
+      severity: (i.severity || 'MEDIUM') as Issue['severity'],
+      description: String(i.description || ''),
+      status: (i.status === 'RESOLVED' ? 'RESOLVED' : 'OPEN') as Issue['status'],
+      createdBy: String(i.created_by || 'staff'),
+      createdAt: String(i.created_at || new Date().toISOString()),
+      resolvedAt: i.resolved_at ? String(i.resolved_at) : undefined,
+    }));
+
+    const auditLogs: AuditLog[] = (auditRes.data || []).map((a: Row) => ({
+      id: String(a.id),
+      actor: (a.actor as AuditLog['actor']) || { type: 'STAFF', id: 'system' },
+      action: String(a.action || ''),
+      entityType: String(a.entity_type || ''),
+      entityId: String(a.entity_id || ''),
+      details: (a.details as Record<string, unknown>) || undefined,
+      createdAt: String(a.created_at || new Date().toISOString()),
+    }));
+
+    // Numbered parking bays: 1 to TOTAL_BAYS, all under the first zone
     const bays = [];
     const qrTokens = [];
     const targetZones = zones.length > 0 ? zones : [{ id: 'zone-main', code: 'P', name: 'Tower Parking', active: true }];
-    // Numbered bays: 1 to TOTAL_BAYS, all under the first zone
     const bayZoneId = targetZones[0].id;
     for (let i = 1; i <= TOTAL_BAYS; i++) {
       const bayCode = String(i);
@@ -247,8 +304,8 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       orders,
       photos,
       orderEvents,
-      issues: [],
-      auditLogs: [],
+      issues,
+      auditLogs,
       settings: {
         referencePrefix: 'CB',
         timezone: 'Asia/Qatar',
@@ -273,39 +330,90 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
   }
 }
 
-export async function saveSupabaseState(db: MockDatabase, version: number): Promise<boolean> {
-  const sb = getSupabase();
-  if (!sb) return false;
-
-  try {
-    // 1. Save global sync state for cache
-    await sb.from('app_sync_state').upsert(
-      {
-        id: 'global_state',
-        payload: db,
-        version,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'id' }
-    );
-
-    // 2. Sync all relational tables
-    await syncRelationalTables(db);
-    return true;
-  } catch (err) {
-    console.warn('saveSupabaseState error:', err);
-    return false;
-  }
+// -----------------------------------------------------------------------------
+// WRITE: each change is saved on its own. Nothing replaces the whole database.
+// -----------------------------------------------------------------------------
+export interface SyncChanges {
+  employees?: Employee[];
+  vehicles?: Vehicle[];
+  orders?: Order[];
+  subscriptions?: EmployeeSubscription[];
+  credits?: CreditLedgerEntry[];
+  photos?: OrderPhoto[];
+  orderEvents?: OrderEvent[];
+  issues?: Issue[];
+  auditLogs?: AuditLog[];
 }
 
-async function syncRelationalTables(db: MockDatabase) {
-  const sb = getSupabase();
-  if (!sb) return;
+export interface ApplyResult {
+  ok: boolean;
+  error?: string;
+  /** orders whose reference was already taken on another device and got a new one */
+  referenceFixes: Record<string, string>;
+  /** photos moved to Storage: id -> public url */
+  photoUrls: Record<string, string>;
+  rejected: string[];
+}
+
+function datePrefix(iso: string): string {
+  return `CB-${iso.substring(2, 4)}${iso.substring(5, 7)}${iso.substring(8, 10)}`;
+}
+
+async function nextReference(sb: SupabaseClient, createdAt: string): Promise<string> {
+  const prefix = datePrefix(createdAt);
+  const { data } = await sb
+    .from('orders')
+    .select('reference')
+    .like('reference', `${prefix}-%`)
+    .order('reference', { ascending: false })
+    .limit(1);
+  const last = data && data[0] ? parseInt(String(data[0].reference).split('-').pop() || '0', 10) : 0;
+  return `${prefix}-${String((Number.isFinite(last) ? last : 0) + 1).padStart(4, '0')}`;
+}
+
+async function ensurePhotoBucket(sb: SupabaseClient): Promise<boolean> {
+  if (!hasServiceKey()) return false;
+  const { error } = await sb.storage.createBucket(PHOTO_BUCKET, { public: true });
+  if (error && !/already exists/i.test(error.message)) {
+    console.warn('Photo bucket unavailable:', error.message);
+    return false;
+  }
+  return true;
+}
+
+async function uploadPhoto(sb: SupabaseClient, photo: OrderPhoto): Promise<string | null> {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(photo.blobKey);
+  if (!match) return null;
+  if (!(await ensurePhotoBucket(sb))) return null;
+  const ext = match[1].split('/')[1].replace('jpeg', 'jpg');
+  const path = `${photo.orderId}/${photo.id}.${ext}`;
+  const { error } = await sb.storage
+    .from(PHOTO_BUCKET)
+    .upload(path, Buffer.from(match[2], 'base64'), { contentType: match[1], upsert: true });
+  if (error) {
+    console.warn('Photo upload failed:', error.message);
+    return null;
+  }
+  return sb.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+/**
+ * Applies a set of changed rows. `isAdmin` decides what is allowed:
+ * - anyone can create a NEW order, cancel their own NEW order, and save profile data
+ * - only an admin can move an order through its stages, adjust credits, or cancel a pass
+ * Every admin stage change must follow the status rules.
+ */
+export async function applyChanges(changes: SyncChanges, isAdmin: boolean): Promise<ApplyResult> {
+  const result: ApplyResult = { ok: true, referenceFixes: {}, photoUrls: {}, rejected: [] };
+  const sb = getServerSupabase();
+  if (!sb) return { ...result, ok: false, error: 'Supabase is not configured' };
 
   try {
-    // Sync employees
-    if (db.employees && db.employees.length > 0) {
-      const rows = db.employees.map((e) => ({
+    const v2 = await isSchemaV2(sb);
+
+    // ---- employees and vehicles: profile data, open to the customer flow ----
+    if (changes.employees?.length) {
+      const rows = changes.employees.map((e) => ({
         id: e.id,
         employee_no: e.employeeNo || null,
         full_name: e.fullName,
@@ -315,85 +423,248 @@ async function syncRelationalTables(db: MockDatabase) {
         company: e.company || 'Ministry of Commerce and Industry - State of Qatar',
         status: e.status || 'ACTIVE',
       }));
-      const { error: employeesError } = await sb.from('employees').upsert(rows, { onConflict: 'id' });
-      if (employeesError) {
-        console.warn('Supabase employees sync failed:', employeesError.message);
-      }
+      const { error } = await sb.from('employees').upsert(rows, { onConflict: 'id' });
+      if (error) throw new Error(`employees: ${error.message}`);
     }
 
-    // Sync vehicles
-    if (db.vehicles && db.vehicles.length > 0) {
-      const vRows = db.vehicles.map((v) => ({
+    if (changes.vehicles?.length) {
+      const rows = changes.vehicles.map((v) => ({
         id: v.id,
         employee_id: v.employeeId,
         plate_number: v.plateNumber,
         plate_type: v.plateType || 'Private',
-        make: v.make || 'Porsche',
-        model: v.model || 'Panamera',
-        color: v.color || 'Jet Black Metallic',
+        make: v.make || null,
+        model: v.model || null,
+        color: v.color || null,
         is_default: v.isDefault ?? true,
       }));
-      await sb.from('vehicles').upsert(vRows, { onConflict: 'id' });
+      const { error } = await sb.from('vehicles').upsert(rows, { onConflict: 'id' });
+      if (error) throw new Error(`vehicles: ${error.message}`);
     }
 
-    // Sync orders
-    if (db.orders && db.orders.length > 0) {
-      const oRows = db.orders.map((o) => ({
-        id: o.id,
-        reference: o.reference,
-        employee_id: o.employeeId,
-        bay_id: o.bayId,
-        zone_code_snapshot: o.zoneCodeSnapshot,
-        bay_code_snapshot: o.bayCodeSnapshot,
-        vehicle_snapshot: o.vehicleSnapshot,
-        service_id: o.serviceId,
-        service_snapshot: o.serviceSnapshot,
-        payment_mode: o.paymentMode,
-        price_snapshot: o.priceSnapshot,
-        credits_used: o.creditsUsed || 0,
-        payment_status: o.paymentStatus || 'NOT_APPLICABLE',
-        instructions: o.instructions || null,
-        status: o.status,
-        assignment: o.assignment || null,
-        quality_check: o.qualityCheck || null,
-        return_confirmation: o.returnConfirmation || null,
-        idempotency_key: o.idempotencyKey || null,
-        created_at: o.createdAt,
-        updated_at: o.updatedAt,
-      }));
-      await sb.from('orders').upsert(oRows, { onConflict: 'id' });
+    // ---- orders ----
+    if (changes.orders?.length) {
+      const ids = changes.orders.map((o) => o.id);
+      const { data: existingRows } = await sb.from('orders').select('id,status,status_before_issue,reference').in('id', ids);
+      const existing = new Map<string, Row>((existingRows || []).map((r: Row) => [String(r.id), r]));
+
+      const accepted: Order[] = [];
+      for (const order of changes.orders) {
+        const current = existing.get(order.id);
+
+        if (!current) {
+          // A brand-new order must start as NEW (an admin may also create one)
+          if (order.status !== 'NEW' && !isAdmin) {
+            result.rejected.push(`${order.reference}: a new order must start as NEW`);
+            continue;
+          }
+          // The reference is unique; two devices can pick the same number at the same time
+          const { data: clash } = await sb.from('orders').select('id').eq('reference', order.reference).limit(1);
+          if (clash && clash.length > 0) {
+            const fresh = await nextReference(sb, order.createdAt);
+            result.referenceFixes[order.id] = fresh;
+            order.reference = fresh;
+          }
+          accepted.push(order);
+          continue;
+        }
+
+        const from = String(current.status) as OrderStatus;
+        if (order.status !== from) {
+          const customerCancel = from === 'NEW' && order.status === 'CANCELLED';
+          const statusBefore = current.status_before_issue ? (String(current.status_before_issue) as OrderStatus) : undefined;
+          if (!isAdmin && !customerCancel) {
+            result.rejected.push(`${order.reference}: ${from} -> ${order.status} needs an admin`);
+            continue;
+          }
+          if (isAdmin && !isValidStaffTransition(from, order.status, statusBefore)) {
+            result.rejected.push(`${order.reference}: ${from} -> ${order.status} is not allowed`);
+            continue;
+          }
+        } else if (!isAdmin) {
+          // Same status from a non-admin: nothing to save for this order
+          continue;
+        }
+        accepted.push(order);
+      }
+
+      if (accepted.length > 0) {
+        const rows = accepted.map((o) => {
+          const base: Row = {
+            id: o.id,
+            reference: o.reference,
+            employee_id: o.employeeId,
+            bay_id: o.bayId,
+            zone_code_snapshot: o.zoneCodeSnapshot,
+            bay_code_snapshot: o.bayCodeSnapshot,
+            vehicle_snapshot: o.vehicleSnapshot,
+            service_id: o.serviceId,
+            service_snapshot: o.serviceSnapshot,
+            payment_mode: o.paymentMode,
+            price_snapshot: o.priceSnapshot,
+            credits_used: o.creditsUsed || 0,
+            payment_status: o.paymentStatus || 'NOT_APPLICABLE',
+            instructions: o.instructions || null,
+            status: o.status,
+            assignment: o.assignment || null,
+            quality_check: o.qualityCheck || null,
+            return_confirmation: o.returnConfirmation || null,
+            idempotency_key: o.idempotencyKey || null,
+            created_at: o.createdAt,
+            updated_at: o.updatedAt,
+          };
+          if (v2) {
+            base.cancellation = o.cancellation || null;
+            base.status_before_issue = o.statusBeforeIssue || null;
+            base.version = o.version || 1;
+          }
+          return base;
+        });
+        const { error } = await sb.from('orders').upsert(rows, { onConflict: 'id' });
+        if (error) throw new Error(`orders: ${error.message}`);
+      }
     }
 
-    // Sync employee subscriptions
-    if (db.subscriptions && db.subscriptions.length > 0) {
-      const subRows = db.subscriptions.map((s) => ({
-        id: s.id,
-        employee_id: s.employeeId,
-        package_id: s.packageId,
-        package_snapshot: s.packageSnapshot,
-        status: s.status,
-        activated_at: s.activatedAt,
-        expires_at: s.expiresAt || null,
-        activated_by: s.activatedBy || null,
-      }));
-      await sb.from('employee_subscriptions').upsert(subRows, { onConflict: 'id' });
+    // ---- subscriptions: a cancel is admin-only ----
+    if (changes.subscriptions?.length) {
+      const rows = changes.subscriptions
+        .filter((s) => {
+          if (s.status === 'CANCELLED' && !isAdmin) {
+            result.rejected.push(`subscription ${s.id}: cancel needs an admin`);
+            return false;
+          }
+          return true;
+        })
+        .map((s) => ({
+          id: s.id,
+          employee_id: s.employeeId,
+          package_id: s.packageId,
+          package_snapshot: s.packageSnapshot,
+          status: s.status,
+          activated_at: s.activatedAt,
+          expires_at: s.expiresAt || null,
+          activated_by: s.activatedBy || null,
+        }));
+      if (rows.length) {
+        const { error } = await sb.from('employee_subscriptions').upsert(rows, { onConflict: 'id' });
+        if (error) throw new Error(`subscriptions: ${error.message}`);
+      }
     }
 
-    // Sync credit ledger
-    if (db.credits && db.credits.length > 0) {
-      const cRows = db.credits.map((c) => ({
-        id: c.id,
-        employee_id: c.employeeId,
-        subscription_id: c.subscriptionId || null,
-        order_id: c.orderId || null,
-        amount: c.delta,
-        balance_after: 0,
-        details: { reason: c.reason, actorId: c.actorId },
-        created_at: c.createdAt,
-      }));
-      await sb.from('credit_ledger').upsert(cRows, { onConflict: 'id' });
+    // ---- credit ledger: grants and adjustments are admin-only ----
+    if (changes.credits?.length) {
+      const rows = changes.credits
+        .filter((c) => {
+          if ((c.type === 'ADJUSTMENT' || c.type === 'GRANT') && !isAdmin && c.actorId !== 'system') {
+            // A customer activating their own pass creates a GRANT for themselves; allow it
+            // only when it belongs to a subscription, never as a free-form adjustment.
+            if (c.type === 'ADJUSTMENT' || !c.subscriptionId) {
+              result.rejected.push(`credit ${c.id}: ${c.type} needs an admin`);
+              return false;
+            }
+          }
+          return true;
+        })
+        .map((c) => {
+          const base: Row = {
+            id: c.id,
+            employee_id: c.employeeId,
+            subscription_id: c.subscriptionId || null,
+            order_id: c.orderId || null,
+            amount: c.delta,
+            balance_after: 0,
+            details: { reason: c.reason, actorId: c.actorId, type: c.type },
+            created_at: c.createdAt,
+          };
+          if (v2) {
+            base.type = c.type;
+            base.reason = c.reason || null;
+            base.actor_id = c.actorId;
+          }
+          return base;
+        });
+      if (rows.length) {
+        const { error } = await sb.from('credit_ledger').upsert(rows, { onConflict: 'id' });
+        if (error) throw new Error(`credits: ${error.message}`);
+      }
     }
+
+    // ---- photos: large images go to Storage, the row keeps the link ----
+    if (changes.photos?.length) {
+      const rows: Row[] = [];
+      for (const p of changes.photos) {
+        const url = await uploadPhoto(sb, p);
+        if (url) result.photoUrls[p.id] = url;
+        const row: Row = {
+          id: p.id,
+          order_id: p.orderId,
+          kind: p.kind,
+          storage_path: url || p.blobKey,
+          captured_at: p.createdAt,
+        };
+        if (v2) row.uploaded_by = p.uploadedBy;
+        rows.push(row);
+      }
+      const { error } = await sb.from('order_photos').upsert(rows, { onConflict: 'id' });
+      if (error) throw new Error(`photos: ${error.message}`);
+    }
+
+    // ---- events (the timeline), issues and audit log ----
+    if (changes.orderEvents?.length) {
+      const rows = changes.orderEvents.map((ev) => {
+        const row: Row = {
+          id: ev.id,
+          order_id: ev.orderId,
+          actor_type: ev.actor.type,
+          actor_id: ev.actor.id,
+          actor_name: ev.actor.name || null,
+          from_status: ev.from || null,
+          to_status: ev.to || null,
+          created_at: ev.createdAt,
+        };
+        if (v2) {
+          row.type = ev.type;
+          row.payload = ev.payload || null;
+        }
+        return row;
+      });
+      const { error } = await sb.from('order_events').upsert(rows, { onConflict: 'id' });
+      if (error) throw new Error(`events: ${error.message}`);
+    }
+
+    if (v2 && changes.issues?.length) {
+      const rows = changes.issues.map((i) => ({
+        id: i.id,
+        order_id: i.orderId || null,
+        category: i.category,
+        severity: i.severity,
+        description: i.description,
+        status: i.status,
+        created_by: i.createdBy,
+        created_at: i.createdAt,
+        resolved_at: i.resolvedAt || null,
+      }));
+      const { error } = await sb.from('issues').upsert(rows, { onConflict: 'id' });
+      if (error) throw new Error(`issues: ${error.message}`);
+    }
+
+    if (v2 && changes.auditLogs?.length) {
+      const rows = changes.auditLogs.map((a) => ({
+        id: a.id,
+        actor: a.actor,
+        action: a.action,
+        entity_type: a.entityType,
+        entity_id: a.entityId,
+        details: a.details || null,
+        created_at: a.createdAt,
+      }));
+      const { error } = await sb.from('audit_logs').upsert(rows, { onConflict: 'id' });
+      if (error) throw new Error(`audit: ${error.message}`);
+    }
+
+    return result;
   } catch (err) {
-    console.warn('syncRelationalTables notice:', err);
+    console.warn('applyChanges failed:', err);
+    return { ...result, ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

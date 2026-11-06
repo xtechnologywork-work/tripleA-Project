@@ -343,13 +343,20 @@ function BayOrderingClientScreen() {
     setIsSubmitting(true);
 
     try {
+      // Guests are saved under the shared guest record, never under a real employee
+      const orderActor = portalMode === 'GUEST' ? mockStore.ensureGuestActor() : actor;
+      // A new 8-wash pass is granted first, so the credit it pays with exists when the order is created
+      if (selectedPlan.id === 'subscription-8' && currentEmployee && portalMode !== 'GUEST') {
+        mockStore.activateSubscriptionForEmployee(currentEmployee.id);
+        setRefreshTrigger((prev) => prev + 1);
+      }
       const bay = mockStore.getOrCreateBay(cleanBay);
       const service = mockStore.getServices()[0];
       const finalPlate = plateNumber.trim() || registeredVehicle?.plateNumber || 'Photo Verified';
 
       const vehicleSnapshot: Vehicle = {
         id: `veh-${Date.now()}`,
-        employeeId: actor.id,
+        employeeId: orderActor.id,
         plateNumber: finalPlate,
         plateType,
         make: make || 'Vehicle',
@@ -360,7 +367,7 @@ function BayOrderingClientScreen() {
 
       const created = mockStore.createOrder(
         {
-          employeeId: actor.id,
+          employeeId: orderActor.id,
           bayId: bay.id,
           bayCodeSnapshot: bay.code,
           zoneCodeSnapshot: 'P',
@@ -374,16 +381,11 @@ function BayOrderingClientScreen() {
           instructions: notes.trim() || undefined,
           idempotencyKey: `idem-${Date.now()}-${Math.random()}`,
         },
-        actor
+        orderActor
       );
 
       if (photoPreview) {
-        mockStore.addOrderPhoto(created.id, 'BEFORE', photoPreview, actor.name || actor.id);
-      }
-
-      if (selectedPlan.id === 'subscription-8' && currentEmployee) {
-        mockStore.activateSubscriptionForEmployee(currentEmployee.id);
-        setRefreshTrigger((prev) => prev + 1);
+        mockStore.addOrderPhoto(created.id, 'BEFORE', photoPreview, orderActor.name || orderActor.id);
       }
 
       router.push(`/orders/${created.reference}`);

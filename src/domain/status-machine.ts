@@ -320,3 +320,30 @@ export const STATUS_META: Record<
     badgeVariant: 'muted',
   },
 };
+
+/**
+ * The single source of truth for "can staff move an order from A to B".
+ * Used by the admin dashboard (to disable invalid buttons) and by the server
+ * (to reject an invalid change), so both always agree. Permissions are ignored here.
+ */
+export function isValidStaffTransition(
+  from: OrderStatus,
+  to: OrderStatus,
+  statusBeforeIssue?: OrderStatus
+): boolean {
+  if (TRANSITION_RULES.some((r) => r.from === from && r.to === to && r.allowedActors.includes('STAFF'))) {
+    return true;
+  }
+  // An order with a reported issue may resume the state it had before
+  return from === 'ISSUE_REPORTED' && !!statusBeforeIssue && to === statusBeforeIssue;
+}
+
+/** Everything staff may do next from this status. */
+export function getNextStaffStatuses(from: OrderStatus, statusBeforeIssue?: OrderStatus): OrderStatus[] {
+  const next = new Set<OrderStatus>();
+  for (const r of TRANSITION_RULES) {
+    if (r.from === from && r.allowedActors.includes('STAFF')) next.add(r.to);
+  }
+  if (from === 'ISSUE_REPORTED' && statusBeforeIssue) next.add(statusBeforeIssue);
+  return Array.from(next);
+}

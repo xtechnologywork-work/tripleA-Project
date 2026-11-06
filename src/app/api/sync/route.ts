@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { fetchSupabaseState, saveSupabaseState } from '@/lib/supabase-sync';
-import { isSupabaseConfigured } from '@/lib/supabase';
-import { MockDatabase } from '@/data/mock/seed';
+import { fetchSupabaseState, applyChanges, SyncChanges } from '@/lib/supabase-sync';
+import { isServerSupabaseConfigured, verifyAdmin } from '@/lib/supabase-server';
 
-// Path to persist state across server restarts
+// Local cache used when Supabase is not configured, and as a fallback when it is unreachable
 const DB_FILE = path.join(process.cwd(), '.server_db_sync.json');
 
-// In-memory cache
 let inMemoryDb: Record<string, unknown> | null = null;
 let lastVersion = 1;
 
@@ -16,8 +14,7 @@ function getDb() {
   if (inMemoryDb) return inMemoryDb;
   try {
     if (fs.existsSync(DB_FILE)) {
-      const data = fs.readFileSync(DB_FILE, 'utf-8');
-      inMemoryDb = JSON.parse(data);
+      inMemoryDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
       return inMemoryDb;
     }
   } catch (err) {
@@ -26,7 +23,7 @@ function getDb() {
   return null;
 }
 
-function saveDb(db: Record<string, unknown>) {
+function persistLocal(db: Record<string, unknown>) {
   inMemoryDb = db;
   lastVersion += 1;
   try {
@@ -36,19 +33,41 @@ function saveDb(db: Record<string, unknown>) {
   }
 }
 
-export async function GET() {
-  if (isSupabaseConfigured()) {
+/** Merge changed rows into the local cache by id. Never replaces the whole database. */
+function mergeLocal(changes: SyncChanges) {
+  const db = getDb() || {};
+  for (const [key, rows] of Object.entries(changes)) {
+    if (!Array.isArray(rows)) continue;
+    const list = (Array.isArray(db[key]) ? (db[key] as Array<{ id: string }>) : []).slice();
+    for (const row of rows as Array<{ id: string }>) {
+      const i = list.findIndex((r) => r.id === row.id);
+      if (i >= 0) list[i] = row;
+      else list.unshift(row);
+    }
+    db[key] = list;
+  }
+  persistLocal(db);
+}
+
+// Every open screen polls. They share one read per second instead of each querying 13 tables.
+const CACHE_MS = 1000;
+let stateCache: { at: number; promise: ReturnType<typeof fetchSupabaseState> } | null = null;
+
+function readState(fresh: boolean) {
+  if (!fresh && stateCache && Date.now() - stateCache.at < CACHE_MS) return stateCache.promise;
+  const promise = fetchSupabaseState();
+  stateCache = { at: Date.now(), promise };
+  return promise;
+}
+
+export async function GET(req: Request) {
+  const fresh = new URL(req.url).searchParams.get('fresh') === '1';
+  if (isServerSupabaseConfigured()) {
     try {
-      const remote = await fetchSupabaseState();
+      const remote = await readState(fresh);
       if (remote && remote.db) {
         inMemoryDb = remote.db as unknown as Record<string, unknown>;
         lastVersion = remote.version;
-        // Keep local cache file updated
-        try {
-          fs.writeFileSync(DB_FILE, JSON.stringify(remote.db, null, 2), 'utf-8');
-        } catch {
-          // Ignore
-        }
         return NextResponse.json({
           db: inMemoryDb,
           version: lastVersion,
@@ -57,15 +76,14 @@ export async function GET() {
         });
       }
     } catch {
-      // Graceful fallback to local cache
+      // Graceful fallback to the local cache
     }
   }
 
-  const db = getDb();
   return NextResponse.json({
-    db,
+    db: getDb(),
     version: lastVersion,
-    source: isSupabaseConfigured() ? 'local_fallback' : 'local',
+    source: isServerSupabaseConfigured() ? 'local_fallback' : 'local',
     timestamp: Date.now(),
   });
 }
@@ -73,21 +91,35 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    if (body && body.db) {
-      saveDb(body.db);
 
-      // Async live sync to Supabase
-      if (isSupabaseConfigured()) {
-        saveSupabaseState(body.db as MockDatabase, lastVersion).catch(() => {});
-      }
-
-      return NextResponse.json({
-        success: true,
-        version: lastVersion,
-        syncedToSupabase: isSupabaseConfigured(),
-      });
+    // The old "send the whole database" format is refused: it could erase other people's work
+    if (!body || !body.changes || typeof body.changes !== 'object') {
+      return NextResponse.json({ success: false, error: 'Send { changes } with the rows that changed' }, { status: 400 });
     }
-    return NextResponse.json({ success: false, error: 'No db provided' }, { status: 400 });
+    const changes = body.changes as SyncChanges;
+
+    if (!isServerSupabaseConfigured()) {
+      mergeLocal(changes);
+      return NextResponse.json({ success: true, version: lastVersion, syncedToSupabase: false, rejected: [] });
+    }
+
+    const admin = await verifyAdmin(req);
+    const result = await applyChanges(changes, !!admin);
+    stateCache = null; // the next read must see this change
+
+    if (!result.ok) {
+      return NextResponse.json({ success: false, error: result.error }, { status: 502 });
+    }
+
+    return NextResponse.json({
+      success: true,
+      version: lastVersion,
+      syncedToSupabase: true,
+      admin: !!admin,
+      rejected: result.rejected,
+      referenceFixes: result.referenceFixes,
+      photoUrls: result.photoUrls,
+    });
   } catch (err: unknown) {
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : String(err) },
@@ -95,4 +127,3 @@ export async function POST(req: Request) {
     );
   }
 }
-

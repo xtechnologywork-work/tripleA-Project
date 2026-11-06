@@ -16,10 +16,41 @@ import {
   Vehicle,
   Issue,
 } from '../../domain/types';
-import { ActorContext, hasPermission, getAllowedTransitions } from '../../domain/status-machine';
+import { ActorContext, hasPermission, getAllowedTransitions, isValidStaffTransition } from '../../domain/status-machine';
 
 const STORAGE_KEY = 'cb_supabase_live_v2';
 const SYNC_CHANNEL_NAME = 'cb_cross_tab_sync';
+
+/** Unique ids: two actions in the same millisecond (or on two devices) can never collide. */
+export function uid(prefix: string): string {
+  const random = Math.random().toString(36).slice(2, 7);
+  return `${prefix}-${Date.now().toString(36)}-${random}`;
+}
+
+type TrackedCollection =
+  | 'employees'
+  | 'vehicles'
+  | 'orders'
+  | 'subscriptions'
+  | 'credits'
+  | 'photos'
+  | 'orderEvents'
+  | 'issues'
+  | 'auditLogs';
+
+const TRACKED: TrackedCollection[] = [
+  'employees',
+  'vehicles',
+  'orders',
+  'subscriptions',
+  'credits',
+  'photos',
+  'orderEvents',
+  'issues',
+  'auditLogs',
+];
+
+type Changes = Partial<Record<TrackedCollection, Array<{ id: string }>>>;
 
 class MockStore {
   private db: MockDatabase | null = null;
@@ -27,6 +58,13 @@ class MockStore {
   private listeners: Array<() => void> = [];
   private lastServerVersion = 0;
   private isSyncing = false;
+
+  // What the server is known to hold: "collection:id" -> JSON. Only rows that differ are sent.
+  private synced = new Map<string, string>();
+  private inFlight = 0;
+  private failStreak = 0;
+  private authToken: string | null = null;
+  private issueListeners: Array<(messages: string[]) => void> = [];
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -50,7 +88,7 @@ class MockStore {
       // Initial server sync from live Supabase
       this.syncFromServer();
 
-      // Background cross-device polling every 1500ms
+      // Background cross-device polling
       setInterval(() => {
         this.syncFromServer();
       }, 1500);
@@ -64,6 +102,19 @@ class MockStore {
     };
   }
 
+  /** Called when the server refuses or fails to save a change (invalid stage, no permission, offline). */
+  public onSyncIssue(listener: (messages: string[]) => void): () => void {
+    this.issueListeners.push(listener);
+    return () => {
+      this.issueListeners = this.issueListeners.filter((l) => l !== listener);
+    };
+  }
+
+  /** The admin dashboard passes its Supabase access token so the server can trust its changes. */
+  public setAuthToken(token: string | null): void {
+    this.authToken = token;
+  }
+
   private notify(): void {
     for (const listener of this.listeners) {
       try {
@@ -74,27 +125,140 @@ class MockStore {
     }
   }
 
-  public async syncFromServer(): Promise<void> {
+  private rowsOf(db: MockDatabase, key: TrackedCollection): Array<{ id: string }> {
+    return ((db as unknown as Record<string, unknown>)[key] as Array<{ id: string }>) || [];
+  }
+
+  /** Remember the server's copy of every tracked row, so later saves send only real changes. */
+  private markAllSynced(db: MockDatabase): void {
+    this.synced.clear();
+    for (const key of TRACKED) {
+      for (const row of this.rowsOf(db, key)) {
+        this.synced.set(`${key}:${row.id}`, JSON.stringify(row));
+      }
+    }
+  }
+
+  private collectChanges(): { changes: Changes; count: number } {
+    const changes: Changes = {};
+    let count = 0;
+    if (!this.db) return { changes, count };
+    for (const key of TRACKED) {
+      for (const row of this.rowsOf(this.db, key)) {
+        if (this.synced.get(`${key}:${row.id}`) !== JSON.stringify(row)) {
+          (changes[key] ||= []).push(row);
+          count += 1;
+        }
+      }
+    }
+    return { changes, count };
+  }
+
+  private hasUnsyncedChanges(): boolean {
+    return this.inFlight > 0 || this.collectChanges().count > 0;
+  }
+
+  private reportIssues(messages: string[]): void {
+    for (const l of this.issueListeners) {
+      try {
+        l(messages);
+      } catch {}
+    }
+  }
+
+  /** Send only the rows that changed. Never replaces the server's database. */
+  private async pushChanges(): Promise<void> {
+    const { changes, count } = this.collectChanges();
+    if (count === 0 || typeof window === 'undefined') return;
+
+    // Snapshot what is being sent, so edits made while the request is running are not marked as saved
+    const sent = new Map<string, string>();
+    for (const key of TRACKED) {
+      for (const row of changes[key] || []) sent.set(`${key}:${row.id}`, JSON.stringify(row));
+    }
+
+    this.inFlight += 1;
+    try {
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {}),
+        },
+        body: JSON.stringify({ changes }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data.success === false) {
+        this.failStreak += 1;
+        this.reportIssues([data.error || 'Could not save to the server. It will retry.']);
+        return;
+      }
+
+      const rejected: string[] = Array.isArray(data.rejected) ? data.rejected : [];
+
+      // Apply fixes the server made while saving (a new order number, or a photo moved to Storage)
+      const fixes: Record<string, string> = data.referenceFixes || {};
+      const photoUrls: Record<string, string> = data.photoUrls || {};
+      if (this.db) {
+        for (const order of this.db.orders) {
+          if (fixes[order.id]) order.reference = fixes[order.id];
+        }
+        for (const photo of this.db.photos) {
+          if (photoUrls[photo.id]) photo.blobKey = photoUrls[photo.id];
+        }
+      }
+
+      for (const [k, json] of sent) {
+        const id = k.slice(k.indexOf(':') + 1);
+        const collection = k.slice(0, k.indexOf(':')) as TrackedCollection;
+        const row = this.db ? this.rowsOf(this.db, collection).find((r) => r.id === id) : undefined;
+        const changedBySave = !!(fixes[id] || photoUrls[id]);
+        this.synced.set(k, changedBySave && row ? JSON.stringify(row) : json);
+      }
+      this.failStreak = 0;
+
+      if (rejected.length > 0) {
+        this.reportIssues(rejected);
+        this.lastServerVersion = 0; // force the next poll to restore the server's version
+      }
+      if (Object.keys(fixes).length > 0 || Object.keys(photoUrls).length > 0) {
+        this.saveLocalMirror();
+        this.notify();
+      }
+    } catch {
+      // Offline: the rows stay unsynced and are sent with the next save
+      this.failStreak += 1;
+    } finally {
+      this.inFlight -= 1;
+    }
+  }
+
+  public async syncFromServer(fresh = false): Promise<void> {
     if (typeof window === 'undefined' || this.isSyncing) return;
+    // Do not let the server's older copy overwrite a change that is still being saved
+    // (after repeated save failures the server's copy wins, so the screen never freezes)
+    if (this.db && this.failStreak < 5 && this.hasUnsyncedChanges()) {
+      void this.pushChanges();
+      return;
+    }
     this.isSyncing = true;
     try {
-      const res = await fetch('/api/sync', { cache: 'no-store' });
+      const res = await fetch(fresh ? '/api/sync?fresh=1' : '/api/sync', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (data.db && (data.source === 'supabase' || !this.db || data.version !== this.lastServerVersion)) {
+          // Re-check: a change may have been made while the request was in flight
+          if (this.db && this.hasUnsyncedChanges()) return;
           this.lastServerVersion = data.version;
           this.db = data.db;
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.db));
-          } catch {}
+          this.markAllSynced(this.db!);
+          this.saveLocalMirror();
           this.notify();
         } else if (!data.db && this.db) {
-          // Initialize server with local state
-          await fetch('/api/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ db: this.db }),
-          });
+          // Server is empty: send the local state once, as changes
+          this.synced.clear();
+          await this.pushChanges();
         }
       }
     } catch {
@@ -123,41 +287,42 @@ class MockStore {
         this.db = JSON.parse(raw);
       } else {
         this.db = createInitialSeed();
-        this.saveToStorage();
+        this.saveLocalMirror();
       }
     } catch {
       this.db = createInitialSeed();
     }
   }
 
-  private saveToStorage(): void {
+  private saveLocalMirror(): void {
     if (typeof window === 'undefined' || !this.db) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.db));
-      if (this.channel) {
-        this.channel.postMessage({ type: 'DB_UPDATED', timestamp: Date.now() });
-      }
-      this.notify();
-
-      // Asynchronously push to server for cross-device sync (PC <-> Phone)
-      fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db: this.db }),
-      }).then(async (res) => {
-        if (res.ok) {
-          const d = await res.json();
-          if (d.version) this.lastServerVersion = d.version;
-        }
-      }).catch(() => {});
     } catch (e) {
       console.error('Failed to save to localStorage:', e);
     }
   }
 
+  private saveToStorage(): void {
+    if (typeof window === 'undefined' || !this.db) return;
+    this.saveLocalMirror();
+    try {
+      if (this.channel) {
+        this.channel.postMessage({ type: 'DB_UPDATED', timestamp: Date.now() });
+      }
+    } catch {}
+    this.notify();
+
+    // Push only what changed, in the background
+    void this.pushChanges();
+  }
+
+  /** Local demo reset: clears this browser's copy only. It never deletes anything on the server. */
   public resetToSeed(): void {
     this.db = createInitialSeed();
-    this.saveToStorage();
+    this.markAllSynced(this.db);
+    this.saveLocalMirror();
+    this.notify();
   }
 
   // --- Core Domain Operations ---
@@ -256,12 +421,16 @@ class MockStore {
   ): Order {
     const db = this.getDb();
     const now = new Date().toISOString();
-    const orderSeq = (db.orders.length + 1).toString().padStart(4, '0');
-    const reference = `CB-${now.substring(2, 4)}${now.substring(5, 7)}${now.substring(8, 10)}-${orderSeq}`;
+    const refPrefix = `CB-${now.substring(2, 4)}${now.substring(5, 7)}${now.substring(8, 10)}`;
+    const lastSeqToday = db.orders
+      .filter((o) => o.reference.startsWith(`${refPrefix}-`))
+      .reduce((max, o) => Math.max(max, parseInt(o.reference.split('-').pop() || '0', 10) || 0), 0);
+    const orderSeq = (lastSeqToday + 1).toString().padStart(4, '0');
+    const reference = `${refPrefix}-${orderSeq}`;
 
     const newOrder: Order = {
       ...orderData,
-      id: `ord-${Date.now()}`,
+      id: uid('ord'),
       reference,
       status: 'NEW',
       version: 1,
@@ -277,7 +446,7 @@ class MockStore {
       }
 
       const creditDebit: CreditLedgerEntry = {
-        id: `crd-${Date.now()}`,
+        id: uid('crd'),
         employeeId: newOrder.employeeId,
         orderId: newOrder.id,
         type: 'DEBIT',
@@ -293,7 +462,7 @@ class MockStore {
 
     // Record Event & Audit
     const event: OrderEvent = {
-      id: `evt-${Date.now()}`,
+      id: uid('evt'),
       orderId: newOrder.id,
       to: 'NEW',
       type: 'CREATED',
@@ -303,7 +472,7 @@ class MockStore {
     db.orderEvents.push(event);
 
     const audit: AuditLog = {
-      id: `aud-${Date.now()}`,
+      id: uid('aud'),
       actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
       action: 'order.create',
       entityType: 'ORDER',
@@ -340,6 +509,9 @@ class MockStore {
     if (!isStaffOrAdmin && !allowed.includes(toStatus)) {
       throw new Error(`Transition from ${order.status} to ${toStatus} is not permitted for this role`);
     }
+    if (isStaffOrAdmin && !isValidStaffTransition(order.status, toStatus, order.statusBeforeIssue)) {
+      throw new Error(`An order that is ${order.status} cannot go to ${toStatus}`);
+    }
 
     const now = new Date().toISOString();
     const previousStatus = order.status;
@@ -369,7 +541,7 @@ class MockStore {
 
       if (shouldRefund) {
         db.credits.push({
-          id: `crd-refund-${Date.now()}`,
+          id: uid('crd-refund'),
           employeeId: order.employeeId,
           orderId: order.id,
           type: 'REFUND',
@@ -383,7 +555,7 @@ class MockStore {
     if (payload.issue) {
       order.statusBeforeIssue = previousStatus;
       db.issues.unshift({
-        id: `iss-${Date.now()}`,
+        id: uid('iss'),
         orderId: order.id,
         category: payload.issue.category as Issue['category'],
         severity: payload.issue.severity,
@@ -398,7 +570,7 @@ class MockStore {
 
     // Record Event & Audit
     db.orderEvents.push({
-      id: `evt-${Date.now()}`,
+      id: uid('evt'),
       orderId: order.id,
       from: previousStatus,
       to: toStatus,
@@ -409,7 +581,7 @@ class MockStore {
     });
 
     db.auditLogs.unshift({
-      id: `aud-${Date.now()}`,
+      id: uid('aud'),
       actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
       action: `order.transition.${toStatus}`,
       entityType: 'ORDER',
@@ -425,7 +597,7 @@ class MockStore {
   public addOrderPhoto(orderId: string, kind: 'BEFORE' | 'AFTER' | 'ISSUE', blobKey: string, uploadedBy: string): OrderPhoto {
     const db = this.getDb();
     const photo: OrderPhoto = {
-      id: `pht-${Date.now()}`,
+      id: uid('pht'),
       orderId,
       kind,
       blobKey,
@@ -448,7 +620,7 @@ class MockStore {
     const db = this.getDb();
     const now = new Date().toISOString();
     db.credits.push({
-      id: `crd-adj-${Date.now()}`,
+      id: uid('crd-adj'),
       employeeId,
       type: 'ADJUSTMENT',
       delta,
@@ -457,7 +629,7 @@ class MockStore {
       createdAt: now,
     });
     db.auditLogs.unshift({
-      id: `aud-${Date.now()}`,
+      id: uid('aud'),
       actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
       action: 'credit.adjust',
       entityType: 'EMPLOYEE',
@@ -466,6 +638,27 @@ class MockStore {
       createdAt: now,
     });
     this.saveToStorage();
+  }
+
+  /**
+   * Guests have no account. Their orders belong to one shared "Guest" record, so they are
+   * never attached to a real employee and never touch anyone's wash credits.
+   */
+  public ensureGuestActor(): ActorContext {
+    const db = this.getDb();
+    const guestId = 'emp-guest';
+    if (!db.employees.some((e) => e.id === guestId)) {
+      db.employees.push({
+        id: guestId,
+        fullName: 'Guest customer',
+        email: 'guest@triplea.qa',
+        phone: '',
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString(),
+      });
+      this.saveToStorage();
+    }
+    return { type: 'EMPLOYEE', id: guestId, name: 'Guest customer', email: 'guest@triplea.qa' };
   }
 
   public findOrCreateEmployeeByPhone(rawPhone: string, fullName?: string): { employee: Employee; isNew: boolean } {
@@ -570,9 +763,11 @@ class MockStore {
 
   public activateSubscriptionForEmployee(employeeId: string): EmployeeSubscription {
     const db = this.getDb();
+    const alreadyActive = db.subscriptions.find((x) => x.employeeId === employeeId && x.status === 'ACTIVE');
+    if (alreadyActive) return alreadyActive;
     const pkg = db.packages.find((p) => p.id === 'pkg-executive') || db.packages[0];
     const now = new Date().toISOString();
-    const subId = `sub-moci-${Date.now()}`;
+    const subId = uid('sub-moci');
 
     const sub: EmployeeSubscription = {
       id: subId,
@@ -589,7 +784,7 @@ class MockStore {
 
     // Grant 8 washes (6 paid + 2 bonus)
     db.credits.push({
-      id: `crd-${Date.now()}`,
+      id: uid('crd'),
       employeeId,
       subscriptionId: subId,
       type: 'GRANT',
@@ -643,7 +838,7 @@ class MockStore {
       Object.assign(vehicle, vehicleData);
     } else {
       vehicle = {
-        id: vehicleData.id || `veh-${employeeId}-${Date.now()}`,
+        id: vehicleData.id || uid('veh'),
         employeeId,
         plateNumber: vehicleData.plateNumber || '559201',
         plateType: vehicleData.plateType || 'Private',

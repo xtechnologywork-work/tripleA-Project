@@ -2,8 +2,10 @@
 
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
+import { getSupabase } from '@/lib/supabase';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { useAuth } from '@/context/auth-context';
 import {
@@ -14,7 +16,7 @@ import {
   EmployeeSubscription,
 } from '@/domain/types';
 import { formatDateTime, formatQAR } from '@/lib/utils';
-import { getAllowedTransitions, ActorContext } from '@/domain/status-machine';
+import { getAllowedTransitions, ActorContext, isValidStaffTransition } from '@/domain/status-machine';
 import {
   Search,
   CheckCircle2,
@@ -38,6 +40,8 @@ import {
   MessageSquare,
   Maximize2,
   KeyRound,
+  LogOut,
+  Loader2,
 } from 'lucide-react';
 
 type AdminTab = 'DISPATCH' | 'CLIENTS' | 'SUBSCRIPTIONS' | 'BAYS' | 'INSIGHTS';
@@ -126,6 +130,89 @@ export default function AdminDashboardPage() {
       clearInterval(interval);
     };
   }, [reloadData]);
+
+  // ---- Sign-in: only admins open the dashboard (when Supabase is configured) ----
+  const router = useRouter();
+  const [authState, setAuthState] = useState<'checking' | 'ok' | 'denied'>('checking');
+  const [adminEmail, setAdminEmail] = useState('');
+
+  useEffect(() => {
+    const sb = getSupabase();
+    if (!sb) {
+      // Local demo mode has no accounts
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- no Supabase: nothing to sign in to
+      setAuthState('ok');
+      return;
+    }
+    let active = true;
+
+    const check = async (token: string | null) => {
+      mockStore.setAuthToken(token);
+      if (!token) {
+        router.replace('/admin/login');
+        return;
+      }
+      try {
+        const res = await fetch('/api/admin/me', { headers: { Authorization: `Bearer ${token}` } });
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          setAdminEmail(data.email || '');
+          setAuthState('ok');
+        } else {
+          setAuthState('denied');
+        }
+      } catch {
+        if (active) setAuthState('denied');
+      }
+    };
+
+    sb.auth.getSession().then(({ data }) => check(data.session?.access_token ?? null));
+    const { data: listener } = sb.auth.onAuthStateChange((event, session) => {
+      mockStore.setAuthToken(session?.access_token ?? null);
+      if (event === 'SIGNED_OUT') router.replace('/admin/login');
+    });
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, [router]);
+
+  const handleSignOut = async () => {
+    await getSupabase()?.auth.signOut();
+    mockStore.setAuthToken(null);
+    router.replace('/admin/login');
+  };
+
+  // ---- Live updates: Supabase tells us the moment anything changes ----
+  useEffect(() => {
+    const sb = getSupabase();
+    if (!sb || authState !== 'ok') return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const pull = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void mockStore.syncFromServer(true);
+      }, 250);
+    };
+    const channel = sb
+      .channel('ops-live')
+      .on('postgres_changes', { event: '*', schema: 'public' }, pull)
+      .subscribe();
+    return () => {
+      if (timer) clearTimeout(timer);
+      void sb.removeChannel(channel);
+    };
+  }, [authState]);
+
+  // ---- The server refused or could not save something: say so ----
+  useEffect(() => {
+    return mockStore.onSyncIssue((messages) => {
+      setToastMessage(messages[0] || 'Could not save');
+      setTimeout(() => setToastMessage(null), 4000);
+    });
+  }, []);
 
   // Filtered Orders for Dispatch
   const filteredOrders = useMemo(() => {
@@ -405,11 +492,42 @@ export default function AdminDashboardPage() {
     ? selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'QUALITY_CHECK'
     : false;
 
+  // Staff can only take a valid next step; everything else is disabled
+  const canGo = (to: OrderStatus) =>
+    !!selectedOrder && isValidStaffTransition(selectedOrder.status, to, selectedOrder.statusBeforeIssue);
+
   const stageShell = (active: boolean) =>
     `rounded-2xl p-4 flex flex-col justify-between gap-4 transition ${
       active ? 'bg-raised ring-2 ring-[#2997ff]' : 'bg-inset'
     }`;
-  const stagePrimary = 'w-full py-2.5 rounded-full text-sm font-semibold transition cursor-pointer flex items-center justify-center gap-1.5';
+  const stagePrimary =
+    'w-full py-2.5 rounded-full text-sm font-semibold transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed';
+
+  if (authState !== 'ok') {
+    return (
+      <div className="min-h-screen bg-canvas flex items-center justify-center px-5 font-sans text-center">
+        {authState === 'checking' ? (
+          <div className="flex items-center gap-3 text-sm text-muted">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Checking your account</span>
+          </div>
+        ) : (
+          <div className="max-w-[380px] space-y-4">
+            <h1 className="text-[20px] font-semibold text-ink">No access to the dashboard</h1>
+            <p className="text-sm text-muted">
+              This account is not an admin. Ask the owner to give it the admin role, then sign in again.
+            </p>
+            <button
+              onClick={handleSignOut}
+              className="px-5 py-2.5 rounded-full bg-fill hover:bg-fill-strong text-ink text-sm font-medium"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen w-screen overflow-hidden flex bg-canvas text-body font-sans antialiased">
@@ -477,7 +595,17 @@ export default function AdminDashboardPage() {
             <div className="w-8 h-8 rounded-full bg-raised flex items-center justify-center text-sm font-semibold text-ink flex-shrink-0">
               {actor.name ? actor.name.charAt(0) : 'A'}
             </div>
-            <span className="hidden lg:block text-sm text-body truncate">{actor.name || 'Admin'}</span>
+            <span className="hidden lg:block text-sm text-body truncate flex-1">{adminEmail || actor.name || 'Admin'}</span>
+            {getSupabase() && (
+              <button
+                onClick={handleSignOut}
+                title="Sign out"
+                aria-label="Sign out"
+                className="w-8 h-8 rounded-full hover:bg-fill text-muted hover:text-ink flex items-center justify-center flex-shrink-0"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
       </aside>
@@ -655,7 +783,7 @@ export default function AdminDashboardPage() {
                         </div>
                       </div>
 
-                      {selectedOrder.status !== 'CANCELLED' && (
+                      {canGo('CANCELLED') && (
                         <button
                           onClick={() => {
                             if (confirm(`Are you sure you want to cancel order ${selectedOrder.reference}?`)) {
@@ -701,7 +829,7 @@ export default function AdminDashboardPage() {
                           </div>
                           <button
                             onClick={() => handleTransition('NEW')}
-                            disabled={selectedOrder.status === 'NEW'}
+                            disabled={selectedOrder.status === 'NEW' || !canGo('NEW')}
                             className={`${stagePrimary} ${
                               selectedOrder.status === 'NEW'
                                 ? 'bg-fill text-dim'
@@ -739,6 +867,7 @@ export default function AdminDashboardPage() {
                           </div>
                           <button
                             onClick={() => handleTransition('ASSIGNED', assigneeId)}
+                            disabled={!canGo('ASSIGNED')}
                             className={`${stagePrimary} bg-[#0071e3] hover:bg-[#0077ed] text-white`}
                           >
                             <User className="h-4 w-4" />
@@ -760,6 +889,7 @@ export default function AdminDashboardPage() {
                           </div>
                           <button
                             onClick={() => handleTransition('IN_PROGRESS')}
+                            disabled={!canGo('IN_PROGRESS')}
                             className={`${stagePrimary} ${
                               selectedOrder.status === 'IN_PROGRESS'
                                 ? 'bg-amber-400/15 text-amber-300 hover:bg-amber-400/25'
@@ -787,6 +917,7 @@ export default function AdminDashboardPage() {
                           </div>
                           <button
                             onClick={() => handleTransition('RETURNED_TO_PARKING')}
+                            disabled={!canGo('RETURNED_TO_PARKING')}
                             className={`${stagePrimary} ${
                               stageIsReady
                                 ? 'bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25'
