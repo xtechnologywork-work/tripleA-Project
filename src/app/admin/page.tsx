@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { getSupabase } from '@/lib/supabase';
+import { InsightsView } from '@/components/admin/insights';
+import type { DataSet } from '@/domain/analytics';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
 import { isCleared, requiresPreWashInspection } from '@/domain/inspection';
@@ -556,6 +558,22 @@ export default function AdminDashboardPage() {
     };
   }, [orders, subscriptions, employees]);
 
+  // Everything the Insights page calculates from
+  const insightsData: DataSet = useMemo(() => {
+    const db = mockStore.getDb();
+    return {
+      orders,
+      events: db.orderEvents,
+      subscriptions,
+      credits: db.credits,
+      employees,
+      inspections: db.inspections || [],
+      issues: db.issues || [],
+    };
+    // lastSyncTime changes whenever fresh data arrives, which is when the store's lists change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, subscriptions, employees, lastSyncTime]);
+
   // Status Styling Helper (Strict Linear/Stripe design - no neon slop)
   // The wash pass of a customer: washes left out of the washes it started with
   const passInfo = (employeeId: string) => {
@@ -723,36 +741,6 @@ export default function AdminDashboardPage() {
     URL.revokeObjectURL(url);
   };
 
-  // ---- Analytics: the last 7 days and the order mix ----
-  const last7Days = (clock === null
-    ? []
-    : Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(clock);
-        d.setHours(0, 0, 0, 0);
-        d.setDate(d.getDate() - (6 - i));
-        return d;
-      })
-  ).map((day) => {
-    const next = new Date(day);
-    next.setDate(next.getDate() + 1);
-    const dayOrders = orders.filter((o) => {
-      const t = new Date(o.createdAt).getTime();
-      return t >= day.getTime() && t < next.getTime() && o.status !== 'CANCELLED';
-    });
-    const revenue = dayOrders
-      .filter((o) => o.paymentMode === 'ONE_TIME')
-      .reduce((sum, o) => sum + (o.priceSnapshot?.amountMinor || 0), 0) / 100;
-    return {
-      label: day.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }),
-      orders: dayOrders.length,
-      revenue,
-    };
-  });
-  const maxDayRevenue = Math.max(1, ...last7Days.map((d) => d.revenue));
-  const statusMix = (['NEW', 'ASSIGNED', 'IN_PROGRESS', 'QUALITY_CHECK', 'COMPLETED', 'RETURNED_TO_PARKING', 'CANCELLED', 'ISSUE_REPORTED'] as OrderStatus[])
-    .map((st) => ({ status: st, count: orders.filter((o) => o.status === st).length }))
-    .filter((x) => x.count > 0);
-
   const closeDialog = () => {
     setDialog(null);
     setDialogText('');
@@ -851,23 +839,6 @@ export default function AdminDashboardPage() {
         )
         .slice(0, 5)
     : [];
-
-  // Real analytics, calculated from the events and orders (no invented numbers)
-  const turnaroundMinutes = (() => {
-    const events = mockStore.getDb().orderEvents;
-    const mins = orders
-      .filter((o) => o.status === 'RETURNED_TO_PARKING')
-      .map((o) => {
-        const ev = events.find((e) => e.orderId === o.id && e.to === 'RETURNED_TO_PARKING');
-        return ev ? (new Date(ev.createdAt).getTime() - new Date(o.createdAt).getTime()) / 60000 : null;
-      })
-      .filter((m): m is number => m !== null && m >= 0);
-    return mins.length ? Math.round(mins.reduce((a, b) => a + b, 0) / mins.length) : null;
-  })();
-  const qcChecked = orders.filter((o) => o.qualityCheck);
-  const qcPassRate = qcChecked.length
-    ? Math.round((qcChecked.filter((o) => o.qualityCheck!.passed).length / qcChecked.length) * 100)
-    : null;
 
   const staffActor: ActorContext = {
     type: 'STAFF',
@@ -1101,7 +1072,9 @@ export default function AdminDashboardPage() {
         {/* Key numbers */}
         <div
           className={`flex-shrink-0 px-4 md:px-8 pb-4 md:pb-5 gap-3 ${
-            mobileDetail && activeTab === 'DISPATCH'
+            activeTab === 'INSIGHTS'
+              ? 'hidden'
+              : mobileDetail && activeTab === 'DISPATCH'
               ? 'hidden min-[1360px]:grid min-[1360px]:grid-cols-6'
               : 'flex overflow-x-auto md:overflow-visible md:grid md:grid-cols-3 xl:grid-cols-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
           }`}
@@ -2027,124 +2000,7 @@ export default function AdminDashboardPage() {
           {/* ================================================================== */}
           {activeTab === 'INSIGHTS' && (
             <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
-              <div className="max-w-[1200px] space-y-4">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                  <div className={`${card} p-4 md:p-6 space-y-4`}>
-                    <h3 className="text-base font-semibold text-ink">Revenue Streams</h3>
-                    <div className="space-y-3 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted">140 QAR Passes</span>
-                        <span className="tabular-nums text-ink">{(metrics.activeSubscribers * 140).toLocaleString()} QAR</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted">Single Washes</span>
-                        <span className="tabular-nums text-ink">{(metrics.combinedRevenueQar - metrics.activeSubscribers * 140).toLocaleString()} QAR</span>
-                      </div>
-                    </div>
-                    <div className="pt-4 border-t border-line">
-                      <div className="text-sm text-muted">Total Revenue</div>
-                      <div className="text-[24px] leading-none mt-1.5 font-semibold text-ink tabular-nums">
-                        {metrics.combinedRevenueQar.toLocaleString()} <span className="text-sm text-dim font-normal">QAR</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className={`${card} p-4 md:p-6 space-y-4`}>
-                    <h3 className="text-base font-semibold text-ink">Operational SLA</h3>
-                    <div className="space-y-3 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted">Average Turnaround</span>
-                        <span className="tabular-nums text-ink">{turnaroundMinutes === null ? 'No data yet' : `${turnaroundMinutes} min`}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted">QC Pass Rate</span>
-                        <span className="tabular-nums text-ink">{qcPassRate === null ? 'No data yet' : `${qcPassRate}%`}</span>
-                      </div>
-                    </div>
-                    <div className="pt-4 border-t border-line">
-                      <div className="text-sm text-muted">Bay Coverage</div>
-                      <div className="text-[24px] leading-none mt-1.5 font-semibold text-ink tabular-nums">
-                        1,200 <span className="text-sm text-dim font-normal">Bays</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className={`${card} p-4 md:p-6 space-y-4`}>
-                    <h3 className="text-base font-semibold text-ink">Ministry Partnership ROI</h3>
-                    <div className="space-y-3 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted">Per-Wash Discount</span>
-                        <span className="tabular-nums text-ink">10 QAR Saved</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted">Pass Bonus Value</span>
-                        <span className="tabular-nums text-ink">100 QAR Saved</span>
-                      </div>
-                    </div>
-                    <div className="pt-4 border-t border-line">
-                      <div className="text-sm text-muted">Cumulative Savings</div>
-                      <div className="text-[24px] leading-none mt-1.5 font-semibold text-ink tabular-nums">
-                        +{metrics.savingsQar.toLocaleString()} <span className="text-sm text-dim font-normal">QAR</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                  <div className={`${card} p-4 md:p-6 space-y-4 lg:col-span-2`}>
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-base font-semibold text-ink">Revenue, last 7 days</h3>
-                      <span className="text-sm text-dim tabular-nums">
-                        {last7Days.reduce((sum, d) => sum + d.revenue, 0).toLocaleString()} QAR
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-7 gap-3 items-end h-40">
-                      {last7Days.map((d) => (
-                        <div key={d.label} className="flex flex-col items-center justify-end gap-2 h-full">
-                          <span className="text-xs text-muted tabular-nums">{d.revenue > 0 ? d.revenue : ''}</span>
-                          <div
-                            className="w-full rounded-lg bg-[#0071e3]"
-                            style={{ height: `${Math.max(4, (d.revenue / maxDayRevenue) * 100)}%`, opacity: d.revenue > 0 ? 1 : 0.25 }}
-                            title={`${d.orders} orders`}
-                          />
-                          <span className="text-xs text-dim whitespace-nowrap">{d.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className={`${card} p-4 md:p-6 space-y-4`}>
-                    <h3 className="text-base font-semibold text-ink">Orders by status</h3>
-                    {statusMix.length === 0 ? (
-                      <p className="text-sm text-dim">No orders yet.</p>
-                    ) : (
-                      <div className="space-y-2.5">
-                        {statusMix.map((x) => (
-                          <div key={x.status} className="flex items-center justify-between gap-3">
-                            {renderStatusPill(x.status)}
-                            <span className="text-sm text-ink tabular-nums font-semibold">{x.count}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className={`${card} p-4 md:p-6 space-y-4`}>
-                  <h3 className="text-base font-semibold text-ink">TripleA Team</h3>
-                  <div className="p-4 rounded-2xl bg-inset flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-full bg-raised flex items-center justify-center font-semibold text-sm text-ink flex-shrink-0">
-                        T
-                      </div>
-                      <span className="font-medium text-ink truncate">TripleA Team</span>
-                    </div>
-                    <span className="text-sm tabular-nums text-muted whitespace-nowrap">
-                      {orders.filter((o) => o.assignment && o.status !== 'RETURNED_TO_PARKING' && o.status !== 'CANCELLED').length} active orders
-                    </span>
-                  </div>
-                </div>
-              </div>
+              <InsightsView data={insightsData} now={clock} />
             </div>
           )}
         </main>
