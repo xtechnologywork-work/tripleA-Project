@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/auth-context";
@@ -16,6 +16,12 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "TripleA Car Care",
   description: "Order a car wash from your parking bay. Track it live, from queue to handover.",
+  icons: { apple: "/pwa-icon?size=180" },
+  appleWebApp: { capable: true, title: "TripleA", statusBarStyle: "black-translucent" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#000000",
 };
 
 export default function RootLayout({

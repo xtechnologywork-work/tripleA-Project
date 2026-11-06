@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useState, useEffect } from 'react';
+import React, { Suspense, useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 
 import { EmployeeNotifications } from '@/components/notifications/employee-notifications';
+import { AddToHomeScreen } from '@/components/notifications/add-to-home-screen';
 
 type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
 
@@ -64,6 +65,9 @@ function BayOrderingClientScreen() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [currentEmployee, setCurrentEmployee] = useState<Employee | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  // After sign in: first add to the Home Screen (phones), then turn on notifications
+  const [installStepDone, setInstallStepDone] = useState(false);
+  const finishInstallStep = useCallback(() => setInstallStepDone(true), []);
 
   // Vehicle form state (declared before the sync effect that populates it)
   const [plateNumber, setPlateNumber] = useState('');
@@ -1062,7 +1066,8 @@ function BayOrderingClientScreen() {
         </div>
       )}
 
-      {portalMode === 'EMPLOYEE' && currentEmployee && <EmployeeNotifications employeeId={currentEmployee.id} />}
+      {portalMode === 'EMPLOYEE' && currentEmployee && !installStepDone && <AddToHomeScreen onDone={finishInstallStep} />}
+      {portalMode === 'EMPLOYEE' && currentEmployee && installStepDone && <EmployeeNotifications employeeId={currentEmployee.id} />}
 
       {/* ------------------------------------------------------------------ */}
       {/* PROFILE                                                            */}
