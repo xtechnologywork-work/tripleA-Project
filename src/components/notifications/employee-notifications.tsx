@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bell, BellOff, CheckCircle2 } from 'lucide-react';
+import { Bell, BellOff, CheckCircle2, X } from 'lucide-react';
 import { mockStore } from '@/data/mock/store';
 import { STATUS_META } from '@/domain/status-machine';
 import { AR_CUSTOMER_LABELS } from '@/components/ui/status-badge';
@@ -14,7 +14,7 @@ const COPY = {
     title: 'Know when your car is ready.',
     lead: 'Turn on notifications and we will tell you when the team starts the wash, and when your car is parked back in its bay.',
     enable: 'Turn on notifications',
-    required: 'Needed to use the service.',
+    close: 'Close',
     deniedTitle: 'Notifications are blocked.',
     deniedLead: 'Allow them in your browser settings for this site, then come back.',
     s1: 'Tap the lock icon next to the address bar.',
@@ -35,7 +35,7 @@ const COPY = {
     title: 'اعرف متى تصبح سيارتك جاهزة.',
     lead: 'فعّل الإشعارات لنخبرك عندما يبدأ الفريق الغسيل، وعندما تعود سيارتك إلى موقفها.',
     enable: 'تفعيل الإشعارات',
-    required: 'مطلوب لاستخدام الخدمة.',
+    close: 'إغلاق',
     deniedTitle: 'الإشعارات محظورة.',
     deniedLead: 'اسمح بها من إعدادات المتصفح لهذا الموقع، ثم ارجع.',
     s1: 'اضغط على أيقونة القفل بجانب شريط العنوان.',
@@ -117,6 +117,8 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
   const c = COPY[language === 'ar' ? 'ar' : 'en'];
   const [perm, setPerm] = useState<Perm>('checking');
   const [skipped, setSkipped] = useState(false);
+  const [closed, setClosed] = useState(false);
+  const close = () => setClosed(true);
   const [justOn, setJustOn] = useState(false);
   const langRef = useRef(language);
   useEffect(() => {
@@ -204,7 +206,7 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
   }, [perm, employeeId]);
 
   const bayHint = mockStore.getEmployeeOrders(employeeId)[0]?.bayCodeSnapshot || '34';
-  const blocking = perm === 'default' || perm === 'denied' || (perm === 'unsupported' && !skipped);
+  const blocking = !closed && (perm === 'default' || perm === 'denied' || (perm === 'unsupported' && !skipped));
   if (perm === 'checking' || (!blocking && !justOn)) return null;
 
   const isDenied = perm === 'denied';
@@ -221,7 +223,16 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
       className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-scrim backdrop-blur-sm"
       data-theme="dark"
     >
-      <div className="w-full sm:max-w-[420px] rounded-t-[28px] sm:rounded-[28px] bg-tile px-7 pt-12 pb-8 text-center">
+      <div className="relative w-full sm:max-w-[420px] rounded-t-[28px] sm:rounded-[28px] bg-tile px-7 pt-12 pb-8 text-center">
+        {!justOn && (
+          <button
+            onClick={close}
+            aria-label={c.close}
+            className="absolute end-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-fill text-muted transition hover:text-ink active:scale-95 cursor-pointer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
         {justOn ? (
           <div className="py-10 space-y-5">
             <CheckCircle2 className="mx-auto h-12 w-12 text-ink" strokeWidth={1.5} />
@@ -274,7 +285,6 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
                   <button onClick={enable} className={primary}>
                     {c.enable}
                   </button>
-                  <p className="text-[13px] text-dim">{c.required}</p>
                 </>
               )}
             </div>
