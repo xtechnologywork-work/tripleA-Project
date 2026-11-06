@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
+  // A second local copy (demo mode, no Supabase) can run beside the real one: set NEXT_DIST_DIR
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   cacheComponents: true,
   partialPrefetching: true,
   allowedDevOrigins: [

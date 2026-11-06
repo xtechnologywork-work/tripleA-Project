@@ -46,3 +46,4 @@ next-env.d.ts
 .server_db_sync.json
 *.tsbuildinfo
 eslint.json
+/.next-local/
