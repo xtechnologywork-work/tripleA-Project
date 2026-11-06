@@ -38,6 +38,8 @@ import {
   BadgeCheck,
   Trash2,
   AlertCircle,
+  Smartphone,
+  Bell,
 } from 'lucide-react';
 
 import { EmployeeNotifications } from '@/components/notifications/employee-notifications';
@@ -68,6 +70,9 @@ function BayOrderingClientScreen() {
   // After sign in: first add to the Home Screen (phones), then turn on notifications
   const [installStepDone, setInstallStepDone] = useState(false);
   const finishInstallStep = useCallback(() => setInstallStepDone(true), []);
+  // Opened by hand from the profile
+  const [profilePrompt, setProfilePrompt] = useState<'install' | 'notif' | null>(null);
+  const closeProfilePrompt = useCallback(() => setProfilePrompt(null), []);
 
   // Vehicle form state (declared before the sync effect that populates it)
   const [plateNumber, setPlateNumber] = useState('');
@@ -1067,7 +1072,11 @@ function BayOrderingClientScreen() {
       )}
 
       {portalMode === 'EMPLOYEE' && currentEmployee && !installStepDone && <AddToHomeScreen onDone={finishInstallStep} />}
-      {portalMode === 'EMPLOYEE' && currentEmployee && installStepDone && <EmployeeNotifications employeeId={currentEmployee.id} />}
+      {portalMode === 'EMPLOYEE' && currentEmployee && installStepDone && !profilePrompt && <EmployeeNotifications employeeId={currentEmployee.id} />}
+      {profilePrompt === 'install' && <AddToHomeScreen forced onDone={closeProfilePrompt} />}
+      {profilePrompt === 'notif' && currentEmployee && (
+        <EmployeeNotifications forced employeeId={currentEmployee.id} onClose={closeProfilePrompt} />
+      )}
 
       {/* ------------------------------------------------------------------ */}
       {/* PROFILE                                                            */}
@@ -1170,6 +1179,24 @@ function BayOrderingClientScreen() {
                       <span>{t('editProfile')}</span>
                     </button>
                   </div>
+                </section>
+
+                {/* The app on this phone */}
+                <section className={`${tile} p-4 grid grid-cols-2 gap-3`}>
+                  <button
+                    onClick={() => setProfilePrompt('install')}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-inset hover:bg-fill px-3 py-4 text-sm text-ink transition active:scale-95 cursor-pointer"
+                  >
+                    <Smartphone className="h-4 w-4 shrink-0" />
+                    <span>{t('addToHomeBtn')}</span>
+                  </button>
+                  <button
+                    onClick={() => setProfilePrompt('notif')}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-inset hover:bg-fill px-3 py-4 text-sm text-ink transition active:scale-95 cursor-pointer"
+                  >
+                    <Bell className="h-4 w-4 shrink-0" />
+                    <span>{t('notificationsBtn')}</span>
+                  </button>
                 </section>
 
                 {/* Wash pass */}

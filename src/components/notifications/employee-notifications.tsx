@@ -112,13 +112,45 @@ const SEEN_KEY = 'triplea_seen_status';
  * Asks the employee to turn notifications on right after sign in (the screen cannot be closed
  * until they do), then shows a system notification whenever one of their orders changes stage.
  */
-export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
+export function EmployeeNotifications({
+  employeeId,
+  forced = false,
+  onClose,
+}: {
+  employeeId: string;
+  /** Opened from the profile: always shown, even if it was closed before */
+  forced?: boolean;
+  onClose?: () => void;
+}) {
   const { language, isRtl } = useLanguage();
   const c = COPY[language === 'ar' ? 'ar' : 'en'];
   const [perm, setPerm] = useState<Perm>('checking');
   const [skipped, setSkipped] = useState(false);
   const [closed, setClosed] = useState(false);
-  const close = () => setClosed(true);
+  const [seen, setSeen] = useState<boolean | null>(null);
+  const seenKey = `triplea_notif_prompted_${employeeId}`;
+  const markSeen = () => {
+    try {
+      localStorage.setItem(seenKey, '1');
+    } catch {
+      // Ignore
+    }
+  };
+  const close = () => {
+    markSeen();
+    setClosed(true);
+    onClose?.();
+  };
+  useEffect(() => {
+    let was = false;
+    try {
+      was = localStorage.getItem(seenKey) === '1';
+    } catch {
+      // Ignore
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the saved choice is only known on the client
+    setSeen(was);
+  }, [seenKey]);
   const [justOn, setJustOn] = useState(false);
   const langRef = useRef(language);
   useEffect(() => {
@@ -151,11 +183,15 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
     try {
       const result = await Notification.requestPermission();
       setPerm(result as Perm);
+      if (result !== 'default') markSeen();
       if (result === 'granted') {
         setJustOn(true);
         const cc = COPY[langRef.current === 'ar' ? 'ar' : 'en'];
         await showSystemNotification(cc.readyTitle, cc.readyBody, 'welcome', '/orders');
-        setTimeout(() => setJustOn(false), 1800);
+        setTimeout(() => {
+          setJustOn(false);
+          onClose?.();
+        }, 1800);
       }
     } catch {
       setPerm(readPerm());
@@ -206,8 +242,10 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
   }, [perm, employeeId]);
 
   const bayHint = mockStore.getEmployeeOrders(employeeId)[0]?.bayCodeSnapshot || '34';
-  const blocking = !closed && (perm === 'default' || perm === 'denied' || (perm === 'unsupported' && !skipped));
-  if (perm === 'checking' || (!blocking && !justOn)) return null;
+  const needsPrompt = perm === 'default' || perm === 'denied' || (perm === 'unsupported' && !skipped);
+  const blocking = forced ? !closed : !closed && seen === false && needsPrompt;
+  const alreadyOn = forced && perm === 'granted';
+  if (perm === 'checking' || seen === null || (!blocking && !justOn)) return null;
 
   const isDenied = perm === 'denied';
   const isUnsupported = perm === 'unsupported';
@@ -233,7 +271,7 @@ export function EmployeeNotifications({ employeeId }: { employeeId: string }) {
             <X className="h-4 w-4" />
           </button>
         )}
-        {justOn ? (
+        {justOn || alreadyOn ? (
           <div className="py-10 space-y-5">
             <CheckCircle2 className="mx-auto h-12 w-12 text-ink" strokeWidth={1.5} />
             <h2 className="text-[28px] font-semibold leading-[1.1] tracking-[-0.02em] text-ink">{c.readyTitle}</h2>

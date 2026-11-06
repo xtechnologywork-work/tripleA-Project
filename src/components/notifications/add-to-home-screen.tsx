@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Share, SquarePlus, EllipsisVertical, Smartphone } from 'lucide-react';
+import { Share, SquarePlus, EllipsisVertical, Smartphone, CheckCircle2 } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 
 interface InstallEvent extends Event {
@@ -31,6 +31,8 @@ const COPY = {
     a3: 'Open TripleA from your Home Screen.',
     install: 'Install',
     skip: 'Continue in the browser',
+    close: 'Close',
+    already: 'TripleA is already on your Home Screen.',
     note: 'Notifications will not reach your lock screen this way.',
   },
   ar: {
@@ -45,9 +47,13 @@ const COPY = {
     a3: 'افتح TripleA من شاشتك الرئيسية.',
     install: 'تثبيت',
     skip: 'المتابعة في المتصفح',
+    close: 'إغلاق',
+    already: 'TripleA موجود بالفعل على شاشتك الرئيسية.',
     note: 'بهذه الطريقة لن تصل الإشعارات إلى شاشة القفل.',
   },
 } as const;
+
+const SEEN_KEY = 'triplea_install_prompted';
 
 type Kind = 'checking' | 'none' | 'ios' | 'android';
 
@@ -67,19 +73,34 @@ function detect(): Kind {
  * The first step after sign in on a phone: add the app to the Home Screen.
  * Calls onDone when the app is already installed, on a computer, or when the person chooses to continue.
  */
-export function AddToHomeScreen({ onDone }: { onDone: () => void }) {
+export function AddToHomeScreen({ onDone, forced = false }: { onDone: () => void; forced?: boolean }) {
   const { language, isRtl } = useLanguage();
   const c = COPY[language === 'ar' ? 'ar' : 'en'];
   const [kind, setKind] = useState<Kind>('checking');
   const [canPrompt, setCanPrompt] = useState(false);
+  const [installed, setInstalled] = useState(false);
 
   useEffect(() => {
-    const k = detect();
-    if (k === 'none') {
+    let k = detect();
+    let was = false;
+    try {
+      was = localStorage.getItem(SEEN_KEY) === '1';
+    } catch {
+      // Ignore
+    }
+    if (!forced && (k === 'none' || was)) {
       onDone();
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- device type is only known on the client
+    // Asked from the profile: an installed app says so, a computer shows the browser steps
+    if (k === 'none') {
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (navigator as Navigator & { standalone?: boolean }).standalone === true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- install state is only known on the client
+      setInstalled(standalone);
+      k = 'android';
+    }
     setKind(k);
     setCanPrompt(!!deferredInstall);
     const onPrompt = () => setCanPrompt(!!deferredInstall);
@@ -90,9 +111,18 @@ export function AddToHomeScreen({ onDone }: { onDone: () => void }) {
       window.removeEventListener('beforeinstallprompt', onPrompt);
       window.removeEventListener('appinstalled', onInstalled);
     };
-  }, [onDone]);
+  }, [onDone, forced]);
 
   if (kind === 'checking' || kind === 'none') return null;
+
+  const finish = () => {
+    try {
+      localStorage.setItem(SEEN_KEY, '1');
+    } catch {
+      // Ignore
+    }
+    onDone();
+  };
 
   const install = async () => {
     if (!deferredInstall) return;
@@ -100,7 +130,7 @@ export function AddToHomeScreen({ onDone }: { onDone: () => void }) {
     const choice = await deferredInstall.userChoice.catch(() => null);
     deferredInstall = null;
     setCanPrompt(false);
-    if (choice?.outcome === 'accepted') onDone();
+    if (choice?.outcome === 'accepted') finish();
   };
 
   const steps =
@@ -126,19 +156,25 @@ export function AddToHomeScreen({ onDone }: { onDone: () => void }) {
       data-theme="dark"
     >
       <div className="w-full sm:max-w-[420px] rounded-t-[28px] sm:rounded-[28px] bg-tile px-7 pt-12 pb-8 text-center">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/images/triplea-shield.png" alt="" className="mx-auto h-14 w-12 object-contain" />
+        {installed ? (
+          <CheckCircle2 className="mx-auto h-12 w-12 text-ink" strokeWidth={1.5} />
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src="/images/triplea-shield.png" alt="" className="mx-auto h-14 w-12 object-contain" />
+        )}
         <h2
           id="install-title"
           className="mt-6 text-[30px] font-semibold leading-[1.1] tracking-[-0.02em] text-ink text-balance"
         >
-          {c.title}
+          {installed ? c.already : c.title}
         </h2>
-        <p className="mx-auto mt-3 max-w-[340px] text-[17px] leading-[1.47] tracking-[-0.01em] text-muted">
-          {kind === 'ios' ? c.leadIos : c.leadAndroid}
-        </p>
+        {!installed && (
+          <p className="mx-auto mt-3 max-w-[340px] text-[17px] leading-[1.47] tracking-[-0.01em] text-muted">
+            {kind === 'ios' ? c.leadIos : c.leadAndroid}
+          </p>
+        )}
 
-        {!(kind === 'android' && canPrompt) && (
+        {!installed && !(kind === 'android' && canPrompt) && (
           <ol className="mx-auto mt-7 max-w-[340px] space-y-3 text-start">
             {steps.map((step, i) => (
               <li key={step.text} className="flex items-center gap-3 text-[15px] text-ink">
@@ -155,7 +191,7 @@ export function AddToHomeScreen({ onDone }: { onDone: () => void }) {
         )}
 
         <div className="mt-9 space-y-3">
-          {kind === 'android' && canPrompt && (
+          {!installed && kind === 'android' && canPrompt && (
             <button
               onClick={install}
               className="w-full rounded-full bg-[#0071e3] py-3.5 text-[17px] font-normal text-white transition hover:bg-[#0077ed] active:scale-95 cursor-pointer"
@@ -164,16 +200,16 @@ export function AddToHomeScreen({ onDone }: { onDone: () => void }) {
             </button>
           )}
           <button
-            onClick={onDone}
+            onClick={finish}
             className={
               kind === 'android' && canPrompt
                 ? 'w-full py-2 text-[15px] text-link-soft cursor-pointer'
                 : 'w-full rounded-full bg-raised py-3.5 text-[17px] font-normal text-ink transition active:scale-95 cursor-pointer'
             }
           >
-            {c.skip}
+            {forced ? c.close : c.skip}
           </button>
-          <p className="text-[13px] text-dim">{c.note}</p>
+          {!forced && <p className="text-[13px] text-dim">{c.note}</p>}
         </div>
       </div>
     </div>

@@ -160,6 +160,9 @@ export const translations = {
     processing: 'جاري المعالجة...',
 
     // Language Toggle
+    appSettingsTitle: 'التطبيق',
+    addToHomeBtn: 'إضافة إلى الشاشة الرئيسية',
+    notificationsBtn: 'الإشعارات',
     toggleLangLabel: 'English',
     langName: 'العربية',
   },
@@ -322,6 +325,9 @@ export const translations = {
     processing: 'Processing...',
 
     // Language Toggle
+    appSettingsTitle: 'App',
+    addToHomeBtn: 'Add to Home Screen',
+    notificationsBtn: 'Notifications',
     toggleLangLabel: 'العربية',
     langName: 'English',
   },
