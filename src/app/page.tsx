@@ -40,6 +40,8 @@ import {
   AlertCircle,
 } from 'lucide-react';
 
+import { EmployeeNotifications } from '@/components/notifications/employee-notifications';
+
 type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
 
 function BayOrderingClientScreen() {
@@ -1059,6 +1061,8 @@ function BayOrderingClientScreen() {
           <div role="status" className="px-4 py-2.5 rounded-full bg-raised text-ink text-sm">{notice}</div>
         </div>
       )}
+
+      {portalMode === 'EMPLOYEE' && currentEmployee && <EmployeeNotifications employeeId={currentEmployee.id} />}
 
       {/* ------------------------------------------------------------------ */}
       {/* PROFILE                                                            */}

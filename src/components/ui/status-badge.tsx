@@ -6,7 +6,7 @@ import { STATUS_META } from '@/domain/status-machine';
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/language-context';
 
-const AR_CUSTOMER_LABELS: Record<OrderStatus, string> = {
+export const AR_CUSTOMER_LABELS: Record<OrderStatus, string> = {
   NEW: 'تم استلام الطلب',
   ASSIGNED: 'تم تعيين الفريق',
   IN_PROGRESS: 'جاري غسل السيارة',
