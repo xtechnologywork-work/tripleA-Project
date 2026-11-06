@@ -22,7 +22,6 @@ import {
   Camera,
   Check,
   User,
-  Sparkles,
   KeyRound,
   ChevronRight,
   ChevronLeft,
@@ -1010,7 +1009,6 @@ function BayOrderingClientScreen() {
                   }
                   className={`${primaryBtn} w-full py-3.5 text-[17px] font-normal active:scale-95`}
                 >
-                  <Sparkles className="h-4 w-4" />
                   <span>{t('orderWithPassBtn')}</span>
                 </button>
               )}
@@ -1293,7 +1291,6 @@ function BayOrderingClientScreen() {
                         }}
                         className={`${primaryBtn} w-full py-3`}
                       >
-                        <Sparkles className="h-4 w-4" />
                         <span>{t('confirmOrderBtn')}</span>
                       </button>
                     </>
