@@ -302,7 +302,7 @@ export default function AdminDashboardPage() {
         (o.vehicleSnapshot.make || '').toLowerCase().includes(q) ||
         (client?.fullName || '').toLowerCase().includes(q) ||
         (client?.phone || '').includes(q) ||
-        (client?.qid || '').includes(q);
+        (client?.employeeNo || '').includes(q);
 
       const matchesStatus = statusFilter === 'ALL' || o.status === statusFilter;
       const matchesZone = zoneFilter === 'ALL' || o.zoneCodeSnapshot === zoneFilter;
@@ -335,7 +335,7 @@ export default function AdminDashboardPage() {
         !q ||
         emp.fullName.toLowerCase().includes(q) ||
         (emp.phone || '').includes(q) ||
-        (emp.qid || '').includes(q) ||
+        (emp.employeeNo || '').includes(q) ||
         (emp.employeeNo || '').toLowerCase().includes(q);
 
       const sub = mockStore.getEmployeeSubscription(emp.id);
@@ -585,14 +585,13 @@ export default function AdminDashboardPage() {
   };
 
   const exportClientsCsv = () => {
-    const header = ['Name', 'Employee number', 'Phone', 'QID', 'Company', 'Pass', 'Wash balance', 'Orders'];
+    const header = ['Name', 'Employee number', 'Phone', 'Company', 'Pass', 'Wash balance', 'Orders'];
     const rows = filteredClients.map((emp) => {
       const sub = mockStore.getEmployeeSubscription(emp.id);
       return [
         emp.fullName,
         emp.employeeNo || '',
         emp.phone || '',
-        emp.qid || '',
         emp.company || '',
         sub && sub.status === 'ACTIVE' ? 'Active' : 'None',
         mockStore.getCreditBalance(emp.id),
@@ -732,7 +731,7 @@ export default function AdminDashboardPage() {
           (e) =>
             e.fullName.toLowerCase().includes(gq) ||
             (e.employeeNo || '').toLowerCase().includes(gq) ||
-            (e.qid || '').includes(gq) ||
+            (e.employeeNo || '').includes(gq) ||
             (e.phone || '').replace(/\D/g, '').includes(gq.replace(/\D/g, '') || '\u0000')
         )
         .slice(0, 5)
@@ -1244,9 +1243,9 @@ export default function AdminDashboardPage() {
                           </div>
                           <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div className="rounded-2xl bg-inset p-4">
-                              <dt className={subtle}>Qatar ID (QID)</dt>
+                              <dt className={subtle}>Employee number</dt>
                               <dd className="mt-1 text-[14px] text-ink font-medium tabular-nums">
-                                {selectedOrderClient?.qid || <span className="text-dim">—</span>}
+                                {selectedOrderClient?.employeeNo || <span className="text-dim">—</span>}
                               </dd>
                             </div>
                             <div className="rounded-2xl bg-inset p-4">
@@ -1517,7 +1516,7 @@ export default function AdminDashboardPage() {
                                     <span className="font-semibold text-ink block">{emp.fullName}</span>
                                     <div className="flex items-center gap-2 mt-0.5 text-xs text-dim tabular-nums">
                                       <span>{emp.employeeNo || `MOCI-${(emp.phone || '').slice(-4)}`}</span>
-                                      {emp.qid && <span>QID: {emp.qid}</span>}
+                                      {emp.employeeNo && <span>Employee no: {emp.employeeNo}</span>}
                                     </div>
                                   </div>
                                 </div>
@@ -1663,7 +1662,7 @@ export default function AdminDashboardPage() {
                                 <span className="font-semibold text-ink block">{client?.fullName || 'Ministry Staff'}</span>
                                 <div className="flex items-center gap-2 mt-0.5 text-xs text-dim tabular-nums">
                                   <span>{sub.id}</span>
-                                  {client?.qid && <span>QID: {client.qid}</span>}
+                                  {client?.employeeNo && <span>Employee no: {client.employeeNo}</span>}
                                 </div>
                               </td>
                               <td className="py-3.5 px-5 tabular-nums text-body">{client?.phone || 'N/A'}</td>
@@ -1979,8 +1978,8 @@ export default function AdminDashboardPage() {
                 <dd className="mt-1 text-ink tabular-nums">{panelClient.phone || '—'}</dd>
               </div>
               <div className="rounded-2xl bg-tile p-4">
-                <dt className="text-xs text-dim">QID</dt>
-                <dd className="mt-1 text-ink tabular-nums">{panelClient.qid || '—'}</dd>
+                <dt className="text-xs text-dim">Employee number</dt>
+                <dd className="mt-1 text-ink tabular-nums">{panelClient.employeeNo || '—'}</dd>
               </div>
               <div className="rounded-2xl bg-tile p-4">
                 <dt className="text-xs text-dim">Wash balance</dt>
@@ -2247,8 +2246,8 @@ export default function AdminDashboardPage() {
               <div>
                 <span className="text-sm text-dim">Wash Balance Adjustment</span>
                 <h4 className="text-lg font-semibold text-ink tracking-tight mt-0.5">{creditModalClient.fullName}</h4>
-                {creditModalClient.qid && (
-                  <span className="text-xs tabular-nums text-dim">QID: {creditModalClient.qid}</span>
+                {creditModalClient.employeeNo && (
+                  <span className="text-xs tabular-nums text-dim">Employee no: {creditModalClient.employeeNo}</span>
                 )}
               </div>
               <button
@@ -2320,8 +2319,8 @@ export default function AdminDashboardPage() {
               <div>
                 <span className="text-sm text-dim">Wash Order History</span>
                 <h4 className="text-lg font-semibold text-ink tracking-tight mt-0.5">{historyModalClient.fullName}</h4>
-                {historyModalClient.qid && (
-                  <span className="text-xs tabular-nums text-dim">QID: {historyModalClient.qid}</span>
+                {historyModalClient.employeeNo && (
+                  <span className="text-xs tabular-nums text-dim">Employee no: {historyModalClient.employeeNo}</span>
                 )}
               </div>
               <button
