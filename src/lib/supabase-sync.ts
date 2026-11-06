@@ -494,7 +494,7 @@ async function ensurePhotoBucket(sb: SupabaseClient): Promise<boolean> {
 }
 
 async function uploadPhoto(sb: SupabaseClient, photo: OrderPhoto): Promise<string | null> {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(photo.blobKey);
+  const match = /^data:(image\/(?:jpeg|jpg|png|webp|heic));base64,(.+)$/i.exec(photo.blobKey);
   if (!match) return null;
   if (!(await ensurePhotoBucket(sb))) return null;
   const ext = match[1].split('/')[1].replace('jpeg', 'jpg');
@@ -557,7 +557,7 @@ export async function createInspectionUpload(
 }
 
 async function uploadInspectionDataUrl(sb: SupabaseClient, orderId: string, id: string, dataUrl: string): Promise<string | null> {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl);
+  const match = /^data:(image\/(?:jpeg|jpg|png|webp|heic));base64,(.+)$/i.exec(dataUrl);
   if (!match || !(await ensureInspectionBucket(sb))) return null;
   const path = `${orderId}/${id}.${match[1].split('/')[1].replace('jpeg', 'jpg')}`;
   const { error } = await sb.storage
@@ -1011,7 +1011,7 @@ async function validateEmployeeBatch(
   orderIds.delete('');
 
   const [orderRes, ledgerRes, subsRes, svcRes, pkgRes, meRes] = await Promise.all([
-    orderIds.size ? sb.from('orders').select('id,employee_id,status,credits_used').in('id', Array.from(orderIds)) : Promise.resolve({ data: [] as Row[] }),
+    orderIds.size ? sb.from('orders').select('id,employee_id,status,credits_used,payment_mode,price_snapshot,bay_code_snapshot,service_id').in('id', Array.from(orderIds)) : Promise.resolve({ data: [] as Row[] }),
     sb.from('credit_ledger').select('id,order_id,amount,type,details').eq('employee_id', me),
     sb.from('employee_subscriptions').select('id,status').eq('employee_id', me),
     sb.from('services').select('price_minor').order('sort_order', { ascending: true }).limit(1),
@@ -1028,6 +1028,23 @@ async function validateEmployeeBatch(
   const packagePrice = Number(packages[0]?.price_minor || 14000);
   const myRow = (meRes.data || [])[0] as Row | undefined;
   const allowedPrices = new Set([servicePrice, packagePrice]);
+
+  // Rows that already exist under another account can never be overwritten
+  const takenBy = async (table: string, ids: string[], ownerCol: string | null): Promise<Map<string, string>> => {
+    const out = new Map<string, string>();
+    if (!ids.length) return out;
+    const { data } = await sb.from(table).select(ownerCol ? `id,${ownerCol}` : 'id').in('id', ids);
+    for (const r of (data || []) as unknown as Row[]) out.set(String(r.id), ownerCol ? String(r[ownerCol]) : '');
+    return out;
+  };
+  const [vehOwners, subOwners, ledOwners, phoOwners, evOwners, audOwners] = await Promise.all([
+    takenBy('vehicles', (changes.vehicles || []).map((x) => x.id), 'employee_id'),
+    takenBy('employee_subscriptions', (changes.subscriptions || []).map((x) => x.id), 'employee_id'),
+    takenBy('credit_ledger', (changes.credits || []).map((x) => x.id), 'employee_id'),
+    takenBy('order_photos', (changes.photos || []).map((x) => x.id), 'order_id'),
+    takenBy('order_events', (changes.orderEvents || []).map((x) => x.id), 'order_id'),
+    takenBy('audit_logs', (changes.auditLogs || []).map((x) => x.id), null),
+  ]);
 
   const batchOrders = new Map<string, Order>((changes.orders || []).map((o) => [o.id, o]));
   const isMyOrder = (id?: string) => {
@@ -1062,7 +1079,7 @@ async function validateEmployeeBatch(
 
   // ---- vehicles ----
   for (const v of changes.vehicles || []) {
-    if (v.employeeId !== me) errors.push('vehicle: not yours');
+    if (v.employeeId !== me || (vehOwners.has(v.id) && vehOwners.get(v.id) !== me)) errors.push('vehicle: not yours');
     if ((v.plateNumber || '').length > 20 || (v.make || '').length > 40 || (v.model || '').length > 40 || (v.color || '').length > 40) {
       errors.push('vehicle: a field is too long');
     }
@@ -1076,6 +1093,10 @@ async function validateEmployeeBatch(
       continue;
     }
     const current = dbOrders.get(o.id);
+    if (current && String(current.employee_id) !== me) {
+      errors.push(`order ${o.reference}: not yours`);
+      continue;
+    }
     if (!current) {
       const bay = Number(o.bayCodeSnapshot);
       if (o.status !== 'NEW') errors.push(`order ${o.reference}: a new order must start as NEW`);
@@ -1084,6 +1105,12 @@ async function validateEmployeeBatch(
       if (!['ONE_TIME', 'CREDIT'].includes(o.paymentMode)) errors.push(`order ${o.reference}: payment mode is not valid`);
       if (!(o.creditsUsed >= 0 && o.creditsUsed <= 1)) errors.push(`order ${o.reference}: credits used is not valid`);
       if ((o.instructions || '').length > 500) errors.push(`order ${o.reference}: notes are too long`);
+      if (o.paymentMode === 'CREDIT') {
+        const debited = (changes.credits || []).some((c) => c.type === 'DEBIT' && c.orderId === o.id && c.delta === -o.creditsUsed);
+        if (o.creditsUsed !== 1 || !debited) errors.push(`order ${o.reference}: a pass order must use one wash credit`);
+      } else if (o.creditsUsed !== 0) {
+        errors.push(`order ${o.reference}: a paid order cannot use credits`);
+      }
       // Staff-only fields cannot be set by a customer
       keptOrders.push({
         ...o,
@@ -1104,12 +1131,25 @@ async function validateEmployeeBatch(
       errors.push(`order ${o.reference}: you can only cancel an order that is still new`);
       continue;
     }
+    // The row is written back whole, so nothing except the status may differ from what is stored
+    const same =
+      Number(current.credits_used || 0) === Number(o.creditsUsed || 0) &&
+      String(current.payment_mode) === String(o.paymentMode) &&
+      String(current.bay_code_snapshot) === String(o.bayCodeSnapshot) &&
+      Number((current.price_snapshot as Row | null)?.amountMinor) === Number(o.priceSnapshot?.amountMinor);
+    if (!same) {
+      errors.push(`order ${o.reference}: only the status can change`);
+      continue;
+    }
     keptOrders.push(o);
   }
   fixed.orders = keptOrders;
 
   // ---- passes: one active pass at most, from a real package ----
-  const newSubs = (changes.subscriptions || []).filter((x) => !dbSubs.some((d) => String(d.id) === x.id));
+  for (const x of changes.subscriptions || []) {
+    if (subOwners.has(x.id) && subOwners.get(x.id) !== me) errors.push('pass: not yours');
+  }
+  const newSubs = (changes.subscriptions || []).filter((x) => !subOwners.has(x.id));
   const hasActiveInDb = dbSubs.some((d) => String(d.status) === 'ACTIVE');
   for (const sub of newSubs) {
     if (sub.employeeId !== me) errors.push('pass: not yours');
@@ -1129,6 +1169,10 @@ async function validateEmployeeBatch(
   let balance = ledger.reduce((sum, r) => sum + Number(r.amount || 0), 0);
   const newCredits: CreditLedgerEntry[] = [];
   for (const c of changes.credits || []) {
+    if (ledOwners.has(c.id) && ledOwners.get(c.id) !== me) {
+      errors.push('credit: not yours');
+      continue;
+    }
     if (ledgerIds.has(c.id)) continue; // already saved
     if (c.employeeId !== me) {
       errors.push('credit: not yours');
@@ -1138,7 +1182,8 @@ async function validateEmployeeBatch(
       if (!(c.delta < 0 && c.delta >= -3) || !isMyOrder(c.orderId)) errors.push('credit: this debit is not valid');
     } else if (c.type === 'REFUND') {
       const status = c.orderId ? orderStatus(c.orderId) : undefined;
-      const used = c.orderId ? Number(batchOrders.get(c.orderId)?.creditsUsed ?? dbOrders.get(c.orderId)?.credits_used ?? 0) : 0;
+      // For an order that already exists, only the stored value counts
+      const used = c.orderId ? Number(dbOrders.get(c.orderId)?.credits_used ?? batchOrders.get(c.orderId)?.creditsUsed ?? 0) : 0;
       const alreadyRefunded = ledger.some(
         (r) => String(r.order_id) === c.orderId && (String(r.type) === 'REFUND' || String((r.details as Row | null)?.type) === 'REFUND')
       );
@@ -1159,17 +1204,20 @@ async function validateEmployeeBatch(
 
   // ---- photos, timeline, audit ----
   for (const ph of changes.photos || []) {
-    if (!isMyOrder(ph.orderId)) errors.push('photo: not for your order');
-    if (!/^data:image\//.test(ph.blobKey) && !/^https?:\/\//.test(ph.blobKey)) errors.push('photo: not an image');
+    if (!isMyOrder(ph.orderId) || (phoOwners.has(ph.id) && phoOwners.get(ph.id) !== ph.orderId)) errors.push('photo: not for your order');
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(ph.id)) errors.push('photo: bad id');
+    if (!/^data:image\/(?:jpeg|jpg|png|webp|heic);base64,/i.test(ph.blobKey) && !/^https?:\/\//.test(ph.blobKey)) errors.push('photo: not an image');
     if (ph.blobKey.length > MAX_PHOTO_CHARS) errors.push('photo: the image is too large');
   }
   for (const ev of changes.orderEvents || []) {
-    if (!isMyOrder(ev.orderId) || ev.actor.id !== me) errors.push('timeline: not yours');
+    if (!isMyOrder(ev.orderId) || ev.actor.id !== me || (evOwners.has(ev.id) && evOwners.get(ev.id) !== ev.orderId)) errors.push('timeline: not yours');
     if (ev.to && !['NEW', 'CANCELLED'].includes(ev.to)) errors.push('timeline: not allowed');
   }
   for (const a of changes.auditLogs || []) {
     if (a.actor.id !== me) errors.push('audit: not yours');
   }
+  // An existing log entry is never rewritten
+  fixed.auditLogs = (changes.auditLogs || []).filter((a) => !audOwners.has(a.id));
   if ((changes.issues || []).length > 0) errors.push('issues: only staff can report issues');
   if ((changes.inspections || []).length > 0) errors.push('inspections: only staff can save inspections');
   fixed.inspections = [];
