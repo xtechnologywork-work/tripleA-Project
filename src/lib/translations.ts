@@ -22,13 +22,6 @@ export const translations = {
     verifyCodeBtn: 'دخول البوابة',
 
     // Guest Option Card
-    standardAccessBadge: 'الجمهور العام والزوار',
-    noCodeRequired: 'دخول مباشر فوري',
-    guestTitle: 'عميل زائر / الجمهور العام',
-    guestSubtitle: 'خدمة الغسيل الفوري في الموقف',
-    guestDesc: 'غسيل يدوي احترافي لهيكل السيارة الخارجي في موقفك المخصص. سرعة وعناية فائقة.',
-    singleWashPrice: 'غسيل فردي: 30 ر.ق',
-    continueAsGuest: 'متابعة كزائر',
 
     // Phone Entry Modal (Login vs Sign Up)
     ministryPortalLabel: 'بوابة موظفي الوزارة',
@@ -50,6 +43,12 @@ export const translations = {
     employeeNoLabel: 'الرقم الوظيفي',
     employeeNoPlaceholder: '',
     employeeNoRequiredError: 'يرجى إدخال الرقم الوظيفي.',
+    accountExistsError: 'هذا الرقم مسجّل من قبل. سجّل الدخول بدلاً من ذلك.',
+    tooManyAttemptsError: 'محاولات كثيرة. انتظر دقيقة ثم حاول مرة أخرى.',
+    accountSuspendedError: 'هذا الحساب موقوف. تواصل مع فريق TripleA.',
+    genericAuthError: 'تعذّر إكمال العملية. حاول مرة أخرى.',
+    saveFailedNotice: 'تعذّر حفظ آخر تغيير. حاول مرة أخرى.',
+    photoFailedError: 'تعذّر قراءة الصورة. جرّب صورة أخرى.',
     switchToSignUp: 'ليس لديك حساب؟ إنشاء حساب جديد',
     switchToLogin: 'لديك حساب بالفعل؟ تسجيل الدخول',
     signInBtn: 'تسجيل الدخول',
@@ -113,12 +112,8 @@ export const translations = {
 
     // Client Ordering Page Header
     activeEmployeePill: 'موظف الوزارة · 20 ر.ق',
-    activeGuestPill: 'عميل زائر · 30 ر.ق',
     employeeTagline: 'خدمة غسيل حصرية لمنسوبي الوزارة',
     employeeSubTagline: 'اتفاقية شراكة مؤسسية مخفضة',
-    guestTagline: 'خدمات تنظيف سيارات فاخرة في قطر',
-    guestSubTagline: 'بوابة الزوار والجمهور',
-    standardBayServiceBadge: 'خدمة المواقف المعتمدة',
 
     // Service Cards
     oneTimeWash: 'غسيل لمرة واحدة',
@@ -128,7 +123,6 @@ export const translations = {
     freeWashes2: '6 مدفوعة + غسلتين مجاناً (إجمالي 8 غسلات)',
     mociBenefitBadge: 'ميزة منسوبي الوزارة',
     bestValueBadge: 'الأفضل قيمة',
-    guestRateBadge: 'السعر القياسي للزوار',
     qar: 'ر.ق',
 
     // Trust Pillars
@@ -187,13 +181,6 @@ export const translations = {
     verifyCodeBtn: 'Sign in',
 
     // Guest Option Card
-    standardAccessBadge: 'Everyone else',
-    noCodeRequired: 'No sign-in needed',
-    guestTitle: 'Guest',
-    guestSubtitle: 'A car wash at your bay',
-    guestDesc: 'Exterior hand wash at your parking bay, done while you are away.',
-    singleWashPrice: 'Single Wash: 30 QAR',
-    continueAsGuest: 'Continue as Guest',
 
     // Phone Entry Modal (Login vs Sign Up)
     ministryPortalLabel: 'Ministry employees',
@@ -215,6 +202,12 @@ export const translations = {
     employeeNoLabel: 'Employee number',
     employeeNoPlaceholder: '',
     employeeNoRequiredError: 'Enter your employee number.',
+    accountExistsError: 'This number is already registered. Sign in instead.',
+    tooManyAttemptsError: 'Too many attempts. Wait a minute and try again.',
+    accountSuspendedError: 'This account is suspended. Contact the TripleA team.',
+    genericAuthError: 'Something went wrong. Please try again.',
+    saveFailedNotice: 'We could not save your last change. Please try again.',
+    photoFailedError: 'We could not read that photo. Try another one.',
     switchToSignUp: "No account yet? Create one",
     switchToLogin: 'Already registered? Sign in',
     signInBtn: 'Sign in',
@@ -278,12 +271,8 @@ export const translations = {
 
     // Client Ordering Page Header
     activeEmployeePill: 'MOCI employee · 20 QAR',
-    activeGuestPill: 'Guest · 30 QAR',
     employeeTagline: 'Wash rates for Ministry staff',
     employeeSubTagline: 'Set by agreement with the Ministry',
-    guestTagline: 'Car washing in Qatar tower parking',
-    guestSubTagline: 'Guest access',
-    standardBayServiceBadge: 'Bay wash',
 
     // Service Cards
     oneTimeWash: 'Single wash',
@@ -293,7 +282,6 @@ export const translations = {
     freeWashes2: '6 paid + 2 free (8 washes total)',
     mociBenefitBadge: 'Ministry rate',
     bestValueBadge: 'Lowest price per wash',
-    guestRateBadge: 'Guest rate',
     qar: 'QAR',
 
     // Trust Pillars

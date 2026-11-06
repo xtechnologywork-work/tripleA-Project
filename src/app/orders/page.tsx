@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { mockStore } from '@/data/mock/store';
 import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
@@ -21,6 +22,12 @@ import {
 
 export default function EmployeeOrdersPage() {
   const { actor } = useAuth();
+  const router = useRouter();
+
+  // Orders belong to a signed-in employee
+  useEffect(() => {
+    if (!mockStore.getEmployeeToken()) router.replace('/');
+  }, [router]);
   const { isRtl, toggleLanguage } = useLanguage();
   const [orders, setOrders] = useState<Order[]>([]);
   const [creditBalance, setCreditBalance] = useState<number>(0);

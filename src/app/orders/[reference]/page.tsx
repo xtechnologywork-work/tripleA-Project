@@ -32,6 +32,11 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   const reference = resolvedParams.reference;
   const router = useRouter();
   const { actor } = useAuth();
+
+  // Orders belong to a signed-in employee
+  useEffect(() => {
+    if (!mockStore.getEmployeeToken()) router.replace('/');
+  }, [router]);
   const { isRtl, toggleLanguage } = useLanguage();
 
   const [order, setOrder] = useState<Order | null>(null);

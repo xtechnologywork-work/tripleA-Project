@@ -1,52 +1,17 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { fetchSupabaseState, applyChanges, SyncChanges } from '@/lib/supabase-sync';
+import { fetchSupabaseState, applyChanges, scopeState, SyncChanges, Identity } from '@/lib/supabase-sync';
 import { isServerSupabaseConfigured, verifyAdmin } from '@/lib/supabase-server';
+import { verifyEmployeeToken } from '@/lib/employee-session';
+import { getLocalDb, getLocalVersion, mergeLocal } from '@/lib/local-db';
 
-// Local cache used when Supabase is not configured, and as a fallback when it is unreachable
-const DB_FILE = path.join(process.cwd(), '.server_db_sync.json');
+const MAX_BODY_BYTES = 8 * 1024 * 1024; // a compressed photo plus the rows around it
 
-let inMemoryDb: Record<string, unknown> | null = null;
-let lastVersion = 1;
-
-function getDb() {
-  if (inMemoryDb) return inMemoryDb;
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      inMemoryDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
-      return inMemoryDb;
-    }
-  } catch (err) {
-    console.error('Error reading sync db file:', err);
-  }
-  return null;
-}
-
-function persistLocal(db: Record<string, unknown>) {
-  inMemoryDb = db;
-  lastVersion += 1;
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing sync db file:', err);
-  }
-}
-
-/** Merge changed rows into the local cache by id. Never replaces the whole database. */
-function mergeLocal(changes: SyncChanges) {
-  const db = getDb() || {};
-  for (const [key, rows] of Object.entries(changes)) {
-    if (!Array.isArray(rows)) continue;
-    const list = (Array.isArray(db[key]) ? (db[key] as Array<{ id: string }>) : []).slice();
-    for (const row of rows as Array<{ id: string }>) {
-      const i = list.findIndex((r) => r.id === row.id);
-      if (i >= 0) list[i] = row;
-      else list.unshift(row);
-    }
-    db[key] = list;
-  }
-  persistLocal(db);
+/** Who is calling: a signed-in admin, a signed-in employee, or nobody. */
+async function identityOf(req: Request): Promise<Identity> {
+  const admin = await verifyAdmin(req);
+  if (admin) return { admin: true };
+  const employeeId = verifyEmployeeToken(req.headers.get('x-employee-token'));
+  return { admin: false, employeeId: employeeId || undefined };
 }
 
 // Every open screen polls. They share one read per second instead of each querying 13 tables.
@@ -62,34 +27,45 @@ function readState(fresh: boolean) {
 
 export async function GET(req: Request) {
   const fresh = new URL(req.url).searchParams.get('fresh') === '1';
+
   if (isServerSupabaseConfigured()) {
     try {
       const remote = await readState(fresh);
       if (remote && remote.db) {
-        inMemoryDb = remote.db as unknown as Record<string, unknown>;
-        lastVersion = remote.version;
-        return NextResponse.json({
-          db: inMemoryDb,
-          version: lastVersion,
-          source: 'supabase',
-          timestamp: Date.now(),
-        });
+        // Each caller only receives what they are allowed to see
+        const identity = await identityOf(req);
+        return NextResponse.json(
+          {
+            db: scopeState(remote.db, identity),
+            version: remote.version,
+            source: 'supabase',
+            role: identity.admin ? 'admin' : identity.employeeId ? 'employee' : 'public',
+            timestamp: Date.now(),
+          },
+          { headers: { 'Cache-Control': 'no-store' } }
+        );
       }
     } catch {
-      // Graceful fallback to the local cache
+      // fall through to the error below
     }
+    // Never fall back to an old local copy here: it would hand out everyone's data without any check
+    return NextResponse.json({ db: null, error: 'Database is not reachable' }, { status: 503 });
   }
 
-  return NextResponse.json({
-    db: getDb(),
-    version: lastVersion,
-    source: isServerSupabaseConfigured() ? 'local_fallback' : 'local',
-    timestamp: Date.now(),
-  });
+  // Local demo mode (no Supabase configured): no accounts exist, so everything is returned
+  return NextResponse.json(
+    { db: getLocalDb(), version: getLocalVersion(), source: 'local', timestamp: Date.now() },
+    { headers: { 'Cache-Control': 'no-store' } }
+  );
 }
 
 export async function POST(req: Request) {
   try {
+    const length = Number(req.headers.get('content-length') || 0);
+    if (length > MAX_BODY_BYTES) {
+      return NextResponse.json({ success: false, error: 'Request is too large' }, { status: 413 });
+    }
+
     const body = await req.json();
 
     // The old "send the whole database" format is refused: it could erase other people's work
@@ -99,12 +75,16 @@ export async function POST(req: Request) {
     const changes = body.changes as SyncChanges;
 
     if (!isServerSupabaseConfigured()) {
-      mergeLocal(changes);
-      return NextResponse.json({ success: true, version: lastVersion, syncedToSupabase: false, rejected: [] });
+      mergeLocal(changes as Record<string, unknown>);
+      return NextResponse.json({ success: true, version: getLocalVersion(), syncedToSupabase: false, rejected: [] });
     }
 
-    const admin = await verifyAdmin(req);
-    const result = await applyChanges(changes, !!admin);
+    const identity = await identityOf(req);
+    if (!identity.admin && !identity.employeeId) {
+      return NextResponse.json({ success: false, error: 'Sign in first' }, { status: 401 });
+    }
+
+    const result = await applyChanges(changes, identity);
     stateCache = null; // the next read must see this change
 
     if (!result.ok) {
@@ -113,17 +93,15 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       success: true,
-      version: lastVersion,
       syncedToSupabase: true,
-      admin: !!admin,
+      admin: identity.admin,
       rejected: result.rejected,
       referenceFixes: result.referenceFixes,
       photoUrls: result.photoUrls,
     });
   } catch (err: unknown) {
-    return NextResponse.json(
-      { success: false, error: err instanceof Error ? err.message : String(err) },
-      { status: 500 }
-    );
+    console.error('sync POST failed:', err);
+    // The details stay in the server log; the caller gets a short message
+    return NextResponse.json({ success: false, error: 'Could not save' }, { status: 500 });
   }
 }

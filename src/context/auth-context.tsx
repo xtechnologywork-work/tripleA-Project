@@ -11,11 +11,12 @@ interface AuthContextType {
   availableStaff: Array<{ id: string; name: string; email: string; role: 'SUPERADMIN' | 'SUPERVISOR' }>;
 }
 
+// Nobody is signed in until the server confirms a sign in
 const defaultEmployeeActor: ActorContext = {
   type: 'EMPLOYEE',
-  id: 'emp-1',
-  name: 'Hamad Al-Thani',
-  email: 'hamad.althani@investqatar.qa',
+  id: '',
+  name: '',
+  email: '',
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);

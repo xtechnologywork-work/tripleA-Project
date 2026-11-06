@@ -5,6 +5,8 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
+import { compressImage } from '@/lib/image';
+import type { ActorContext } from '@/domain/status-machine';
 import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
 import { Vehicle, Employee } from '@/domain/types';
@@ -39,7 +41,7 @@ import {
   CreditCard,
 } from 'lucide-react';
 
-type PortalMode = 'UNSELECTED' | 'GUEST' | 'EMPLOYEE';
+type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
 
 function BayOrderingClientScreen() {
   const searchParams = useSearchParams();
@@ -54,7 +56,9 @@ function BayOrderingClientScreen() {
   const [portalMode, setPortalMode] = useState<PortalMode>('UNSELECTED');
   const [showPhoneModal, setShowPhoneModal] = useState(false);
   const [authMode, setAuthMode] = useState<'LOGIN' | 'SIGNUP'>('LOGIN');
-  const [employeePhone, setEmployeePhone] = useState('5512 8901');
+  const [employeePhone, setEmployeePhone] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [notice, setNotice] = useState('');
   const [employeeName, setEmployeeName] = useState('');
   const [employeeNumber, setEmployeeNumber] = useState('');
   const [phoneError, setPhoneError] = useState('');
@@ -64,11 +68,11 @@ function BayOrderingClientScreen() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Vehicle form state (declared before the sync effect that populates it)
-  const [plateNumber, setPlateNumber] = useState('559201');
+  const [plateNumber, setPlateNumber] = useState('');
   const [plateType, setPlateType] = useState('Private');
-  const [make, setMake] = useState('Porsche');
-  const [model, setModel] = useState('Panamera');
-  const [color, setColor] = useState('Jet Black Metallic');
+  const [make, setMake] = useState('');
+  const [model, setModel] = useState('');
+  const [color, setColor] = useState('');
 
   // Profile editing state
   const [isEditingProfile, setIsEditingProfile] = useState(false);
@@ -80,32 +84,51 @@ function BayOrderingClientScreen() {
   const [editColor, setEditColor] = useState('');
   const [profileSaveSuccess, setProfileSaveSuccess] = useState(false);
 
-  // Synchronize employee and vehicle state from localStorage or DB
+  // The phone saved on this device pre-fills the sign-in field (once)
   useEffect(() => {
     try {
-      const savedPhone = localStorage.getItem('cb_active_employee_phone') || '5512 8901';
       // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration sync from localStorage
-      setEmployeePhone(savedPhone);
-      let emp = mockStore.getEmployeeByPhone(savedPhone);
+      setEmployeePhone(localStorage.getItem('cb_active_employee_phone') || '');
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  // Re-read the account whenever the data changes (live updates from the server)
+  useEffect(() => mockStore.subscribe(() => setRefreshTrigger((n) => n + 1)), []);
+
+  // Tell the employee when the server could not save something
+  useEffect(() => {
+    return mockStore.onSyncIssue(() => {
+      setNotice(t('saveFailedNotice'));
+      setTimeout(() => setNotice(''), 5000);
+    });
+  }, [t]);
+
+  // Load the signed-in employee and their vehicle
+  useEffect(() => {
+    try {
+      const savedPhone = localStorage.getItem('cb_active_employee_phone') || '';
+      const emp = savedPhone && mockStore.getEmployeeToken() ? mockStore.getEmployeeByPhone(savedPhone) : undefined;
       if (!emp) {
-        emp = mockStore.getDb().employees[0];
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- no session: nobody is signed in
+        setCurrentEmployee(null);
+        return;
       }
-      if (emp) {
-        setCurrentEmployee(emp);
-        setEditName(emp.fullName || '');
-        setEditPhone(emp.phone || savedPhone);
-        setEditQid(emp.qid || '');
-        const vehs = mockStore.getEmployeeVehicles(emp.id);
-        if (vehs && vehs.length > 0) {
-          const v = vehs[0];
-          setEditPlate(v.plateNumber);
-          setEditMakeModel(`${v.make || ''} ${v.model || ''}`.trim());
-          setEditColor(v.color || '');
-          setPlateNumber(v.plateNumber);
-          if (v.make) setMake(v.make);
-          if (v.model) setModel(v.model);
-          if (v.color) setColor(v.color);
-        }
+      setCurrentEmployee(emp);
+      setEditName(emp.fullName || '');
+      setEditPhone(emp.phone || savedPhone);
+      setEditQid(emp.qid || '');
+      const vehs = mockStore.getEmployeeVehicles(emp.id);
+      if (vehs.length > 0) {
+        const v = vehs[0];
+        setEditPlate(v.plateNumber);
+        setEditMakeModel(`${v.make || ''} ${v.model || ''}`.trim());
+        setEditColor(v.color || '');
+        setPlateNumber(v.plateNumber);
+        setMake(v.make || '');
+        setModel(v.model || '');
+        setColor(v.color || '');
       }
     } catch {
       // Ignore
@@ -116,8 +139,8 @@ function BayOrderingClientScreen() {
     if (!currentEmployee) return;
 
     const parts = editMakeModel.trim().split(' ');
-    const newMake = parts[0] || 'Porsche';
-    const newModel = parts.slice(1).join(' ') || 'Panamera';
+    const newMake = parts[0] || '';
+    const newModel = parts.slice(1).join(' ');
 
     const updatedEmp = mockStore.updateEmployee(currentEmployee.id, {
       fullName: editName.trim() || currentEmployee.fullName,
@@ -137,21 +160,22 @@ function BayOrderingClientScreen() {
       }
     }
 
-    const vehs = mockStore.getEmployeeVehicles(currentEmployee.id);
-    const existingVehId = vehs[0]?.id;
-    const updatedVeh = mockStore.saveEmployeeVehicle(currentEmployee.id, {
-      id: existingVehId,
-      plateNumber: editPlate.trim() || '559201',
-      make: newMake,
-      model: newModel,
-      color: editColor.trim() || 'Jet Black Metallic',
-      isDefault: true,
-    });
-
-    setPlateNumber(updatedVeh.plateNumber);
-    setMake(updatedVeh.make || newMake);
-    setModel(updatedVeh.model || newModel);
-    setColor(updatedVeh.color || editColor);
+    // A vehicle is saved only when a plate number was entered
+    if (editPlate.trim()) {
+      const existingVehId = mockStore.getEmployeeVehicles(currentEmployee.id)[0]?.id;
+      const updatedVeh = mockStore.saveEmployeeVehicle(currentEmployee.id, {
+        id: existingVehId,
+        plateNumber: editPlate.trim(),
+        make: newMake,
+        model: newModel,
+        color: editColor.trim(),
+        isDefault: true,
+      });
+      setPlateNumber(updatedVeh.plateNumber);
+      setMake(updatedVeh.make || '');
+      setModel(updatedVeh.model || '');
+      setColor(updatedVeh.color || '');
+    }
 
     setIsEditingProfile(false);
     setProfileSaveSuccess(true);
@@ -159,45 +183,49 @@ function BayOrderingClientScreen() {
     setRefreshTrigger((prev) => prev + 1);
   };
 
-  // Check URL params or sessionStorage on load
+  // Restore the portal after a reload in the same tab
   useEffect(() => {
-    const urlMode = searchParams.get('mode');
-    if (urlMode === 'guest') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync portal mode from URL
-      setPortalMode('GUEST');
-      return;
-    }
-    if (urlMode === 'employee') {
-      setPortalMode('EMPLOYEE');
-      return;
-    }
-
     try {
-      const saved = sessionStorage.getItem('triplea_portal_mode');
-      if (saved === 'GUEST' || saved === 'EMPLOYEE') {
-        setPortalMode(saved);
+      if (sessionStorage.getItem('triplea_portal_mode') === 'EMPLOYEE' && mockStore.getEmployeeToken()) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- restore the session on load
+        setPortalMode('EMPLOYEE');
       }
     } catch {
       // Ignore
     }
-  }, [searchParams]);
+  }, []);
 
   // Every time the screen changes (gate <-> ordering), start at the top of the page
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
   }, [portalMode]);
 
-  const selectGuestPortal = () => {
-    setPortalMode('GUEST');
-    try {
-      sessionStorage.setItem('triplea_portal_mode', 'GUEST');
-    } catch {
-      // Ignore
+  // The gate: already signed in on this device goes straight in; otherwise sign in or sign up
+  const enterEmployeePortal = () => {
+    const savedPhone = (() => {
+      try {
+        return localStorage.getItem('cb_active_employee_phone') || '';
+      } catch {
+        return '';
+      }
+    })();
+    if (mockStore.getEmployeeToken() && savedPhone && mockStore.getEmployeeByPhone(savedPhone)) {
+      try {
+        sessionStorage.setItem('triplea_portal_mode', 'EMPLOYEE');
+      } catch {
+        // Ignore
+      }
+      setPortalMode('EMPLOYEE');
+      return;
     }
+    setAuthMode('LOGIN');
+    setShowPhoneModal(true);
+    setPhoneError('');
   };
 
-  const handleAuthSubmit = (e?: React.FormEvent) => {
+  const handleAuthSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (authBusy) return;
     const cleanDigits = employeePhone.replace(/\D/g, '');
 
     // Standard Qatari mobile is 8 digits
@@ -205,56 +233,53 @@ function BayOrderingClientScreen() {
       setPhoneError(t('phoneError'));
       return;
     }
-
     const qatarNumber = cleanDigits.slice(-8);
 
-    if (authMode === 'LOGIN') {
-      const existing = mockStore.getEmployeeByPhone(qatarNumber);
-      if (!existing) {
-        setPhoneError(t('accountNotFoundError'));
-        return;
-      }
-
-      setCurrentEmployee(existing);
-      setActor({
-        type: 'EMPLOYEE',
-        id: existing.id,
-        name: existing.fullName,
-        email: existing.email,
-      });
-
-      try {
-        localStorage.setItem('cb_active_employee_phone', qatarNumber);
-        sessionStorage.setItem('triplea_portal_mode', 'EMPLOYEE');
-      } catch {
-        // Ignore
-      }
-
-      setPhoneError('');
-      setShowPhoneModal(false);
-      setPortalMode('EMPLOYEE');
-      setRefreshTrigger((prev) => prev + 1);
-    } else {
-      // SIGN UP: requires full name, employee number & phone
+    if (authMode === 'SIGNUP') {
       if (!employeeName.trim()) {
         setPhoneError(t('nameRequiredError'));
         return;
       }
-
-      const cleanEmployeeNo = employeeNumber.trim();
-      if (!cleanEmployeeNo) {
+      if (!employeeNumber.trim()) {
         setPhoneError(t('employeeNoRequiredError'));
         return;
       }
+    }
 
-      const newEmp = mockStore.registerEmployee(qatarNumber, employeeName.trim(), undefined, cleanEmployeeNo);
-      setCurrentEmployee(newEmp);
-      setActor({
-        type: 'EMPLOYEE',
-        id: newEmp.id,
-        name: newEmp.fullName,
-        email: newEmp.email,
+    setAuthBusy(true);
+    setPhoneError('');
+    try {
+      // The server checks the number, creates the account when needed, and returns a signed session
+      const res = await fetch('/api/auth/employee', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: authMode === 'LOGIN' ? 'login' : 'signup',
+          phone: qatarNumber,
+          fullName: employeeName.trim(),
+          employeeNo: employeeNumber.trim(),
+        }),
       });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const errors: Record<string, string> = {
+          NOT_FOUND: t('accountNotFoundError'),
+          EXISTS: t('accountExistsError'),
+          TOO_MANY: t('tooManyAttemptsError'),
+          SUSPENDED: t('accountSuspendedError'),
+          BAD_NAME: t('nameRequiredError'),
+          BAD_EMPLOYEE_NO: t('employeeNoRequiredError'),
+          BAD_PHONE: t('phoneError'),
+        };
+        setPhoneError(errors[data.error] || t('genericAuthError'));
+        return;
+      }
+
+      const employee = data.employee as Employee;
+      mockStore.adoptEmployee(employee, data.token);
+      setCurrentEmployee(employee);
+      setActor({ type: 'EMPLOYEE', id: employee.id, name: employee.fullName, email: employee.email });
 
       try {
         localStorage.setItem('cb_active_employee_phone', qatarNumber);
@@ -263,11 +288,14 @@ function BayOrderingClientScreen() {
         // Ignore
       }
 
-      setPhoneError('');
       setShowPhoneModal(false);
       setPortalMode('EMPLOYEE');
-      setShowContactNoticeModal(true); // Popup for free corporate verification notice on registration
+      if (authMode === 'SIGNUP') setShowContactNoticeModal(true); // Popup for free corporate verification notice on registration
       setRefreshTrigger((prev) => prev + 1);
+    } catch {
+      setPhoneError(t('genericAuthError'));
+    } finally {
+      setAuthBusy(false);
     }
   };
 
@@ -280,6 +308,15 @@ function BayOrderingClientScreen() {
     } catch {
       // Ignore
     }
+  };
+
+  // Sign out: the session and everything saved on this device is removed
+  const handleSignOut = () => {
+    mockStore.signOutEmployee();
+    setCurrentEmployee(null);
+    setActor({ type: 'EMPLOYEE', id: '', name: '', email: '' });
+    setShowProfileModal(false);
+    handleSwitchPortal();
   };
 
   // Subscription, orders, and stats for the active employee
@@ -314,14 +351,13 @@ function BayOrderingClientScreen() {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPhotoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    try {
+      setPhotoPreview(await compressImage(file));
+    } catch {
+      setConfirmError(t('photoFailedError'));
     }
   };
 
@@ -339,14 +375,24 @@ function BayOrderingClientScreen() {
       return;
     }
 
+    if (!currentEmployee) {
+      setConfirmError(t('genericAuthError'));
+      return;
+    }
+
     setConfirmError('');
     setIsSubmitting(true);
 
     try {
-      // Guests are saved under the shared guest record, never under a real employee
-      const orderActor = portalMode === 'GUEST' ? mockStore.ensureGuestActor() : actor;
+      // Every order belongs to the signed-in employee
+      const orderActor: ActorContext = {
+        type: 'EMPLOYEE',
+        id: currentEmployee.id,
+        name: currentEmployee.fullName,
+        email: currentEmployee.email,
+      };
       // A new 8-wash pass is granted first, so the credit it pays with exists when the order is created
-      if (selectedPlan.id === 'subscription-8' && currentEmployee && portalMode !== 'GUEST') {
+      if (selectedPlan.id === 'subscription-8') {
         mockStore.activateSubscriptionForEmployee(currentEmployee.id);
         setRefreshTrigger((prev) => prev + 1);
       }
@@ -450,12 +496,6 @@ function BayOrderingClientScreen() {
   // GATE
   // --------------------------------------------------------------------------
   if (portalMode === 'UNSELECTED') {
-    const openMociLogin = () => {
-      setAuthMode('LOGIN');
-      setShowPhoneModal(true);
-      setPhoneError('');
-    };
-
     return (
       <div dir={isRtl ? 'rtl' : 'ltr'} className="w-full min-h-[100dvh] bg-canvas text-ink font-sans">
         {/* Top bar */}
@@ -506,7 +546,7 @@ function BayOrderingClientScreen() {
             {[
               {
                 key: 'moci',
-                onOpen: openMociLogin,
+                onOpen: enterEmployeePortal,
                 title: t('ministryEmployeeTitle'),
                 subtitle: t('ministrySubtitle'),
                 icon: (
@@ -518,14 +558,6 @@ function BayOrderingClientScreen() {
                   />
                 ),
                 primary: true,
-              },
-              {
-                key: 'guest',
-                onOpen: selectGuestPortal,
-                title: t('guestTitle'),
-                subtitle: t('guestSubtitle'),
-                icon: <User className="h-6 w-6 text-body" />,
-                primary: false,
               },
             ].map((p) => (
               <div
@@ -708,7 +740,7 @@ function BayOrderingClientScreen() {
                   >
                     {t('cancelBtn')}
                   </button>
-                  <button type="submit" className={`${primaryBtn} flex-1 py-3`}>
+                  <button type="submit" disabled={authBusy} className={`${primaryBtn} flex-1 py-3 disabled:opacity-60`}>
                     <span>{authMode === 'LOGIN' ? t('signInBtn') : t('signUpBtn')}</span>
                     <ArrowFwd className="h-4 w-4" />
                   </button>
@@ -764,8 +796,6 @@ function BayOrderingClientScreen() {
   // --------------------------------------------------------------------------
   // ORDERING
   // --------------------------------------------------------------------------
-  const isEmployee = portalMode === 'EMPLOYEE';
-
   const renderPlanTile = (opts: {
     image: string;
     imageAlt: string;
@@ -847,20 +877,18 @@ function BayOrderingClientScreen() {
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />
             <span className="text-sm font-semibold text-ink truncate">
-              {isEmployee ? t('activeEmployeePill') : t('activeGuestPill')}
+              {t('activeEmployeePill')}
             </span>
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            {isEmployee && (
-              <button
-                onClick={() => setShowProfileModal(true)}
-                className="hidden sm:flex items-center gap-2 text-sm text-ink bg-fill hover:bg-fill-strong px-4 py-2 rounded-full whitespace-nowrap"
-              >
-                <User className="h-4 w-4" />
-                <span>{t('viewProfileBtn')}</span>
-              </button>
-            )}
+            <button
+              onClick={() => setShowProfileModal(true)}
+              className="hidden sm:flex items-center gap-2 text-sm text-ink bg-fill hover:bg-fill-strong px-4 py-2 rounded-full whitespace-nowrap"
+            >
+              <User className="h-4 w-4" />
+              <span>{t('viewProfileBtn')}</span>
+            </button>
             {languageToggleBtn}
             <button
               onClick={handleSwitchPortal}
@@ -887,33 +915,23 @@ function BayOrderingClientScreen() {
         <div className="absolute inset-x-0 bottom-0 h-32 -z-10 bg-gradient-to-t from-canvas to-transparent" />
 
         <div data-theme="dark" className="px-6 text-center max-w-[760px] rise-in">
-          {isEmployee ? (
-            <div className="flex items-center justify-center gap-5 mb-6">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/images/triplea-shield.png" alt="TripleA Shield Logo" className="w-16 h-16 md:w-20 md:h-20 object-contain" />
-              <span className="text-dim text-sm select-none">✕</span>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/images/qatar-moci-logo.png"
-                alt="Ministry of Commerce and Industry - State of Qatar"
-                className="w-24 h-24 md:w-32 md:h-32 object-contain"
-              />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-4 mb-6">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/images/triplea-shield.png" alt="TripleA Shield Logo" className="w-20 h-20 md:w-24 md:h-24 object-contain" />
-              <span className="inline-flex px-3.5 py-1 rounded-full bg-fill text-sm text-ink">
-                {t('standardBayServiceBadge')}
-              </span>
-            </div>
-          )}
+          <div className="flex items-center justify-center gap-5 mb-6">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/images/triplea-shield.png" alt="TripleA Shield Logo" className="w-16 h-16 md:w-20 md:h-20 object-contain" />
+            <span className="text-dim text-sm select-none">✕</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/images/qatar-moci-logo.png"
+              alt="Ministry of Commerce and Industry - State of Qatar"
+              className="w-24 h-24 md:w-32 md:h-32 object-contain"
+            />
+          </div>
 
           <h1 className="text-[26px] md:text-[40px] font-semibold tracking-tight leading-[1.08] text-ink">
-            {isEmployee ? t('employeeTagline') : t('guestTagline')}
+            {t('employeeTagline')}
           </h1>
           <p className="text-base md:text-lg text-body mt-3">
-            {isEmployee ? t('employeeSubTagline') : t('guestSubTagline')}
+            {t('employeeSubTagline')}
           </p>
         </div>
       </section>
@@ -921,7 +939,7 @@ function BayOrderingClientScreen() {
       <main className="px-4 md:px-8 pb-6">
         <div className="max-w-[1100px] mx-auto space-y-10">
           {/* Employee strip */}
-          {isEmployee && (
+          {(
             <section aria-label={t('myProfileSectionTitle')} className="space-y-3">
               <h2 className="text-sm text-dim px-1">{t('myProfileSectionTitle')}</h2>
               <div
@@ -962,31 +980,8 @@ function BayOrderingClientScreen() {
           )}
 
           {/* Plans */}
-          <section
-            className={`grid grid-cols-1 gap-4 ${
-              isEmployee ? 'md:grid-cols-2' : 'md:max-w-[560px] md:mx-auto'
-            }`}
-          >
-            {!isEmployee &&
-              renderPlanTile({
-                image: '/images/wash-spray.jpg',
-                imageAlt: 'Car Wash Spray',
-                badge: t('guestRateBadge'),
-                title: t('oneTimeWash'),
-                desc: t('oneTimeDesc'),
-                price: 30,
-                plan: {
-                  id: 'guest-one-time',
-                  title: t('oneTimeWash'),
-                  subtitle: t('oneTimeDesc'),
-                  price: 30,
-                  creditsCost: 0,
-                  paymentMode: 'ONE_TIME',
-                  badge: t('guestRateBadge'),
-                },
-              })}
-
-            {isEmployee && (
+          <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {(
               <>
                 {renderPlanTile({
                   image: '/images/wash-spray.jpg',
@@ -1044,6 +1039,12 @@ function BayOrderingClientScreen() {
       </main>
 
       <footer className="pb-10 pt-4">{poweredByFooter}</footer>
+
+      {notice && (
+        <div className="fixed bottom-5 inset-x-4 z-[60] flex justify-center pointer-events-none">
+          <div role="status" className="px-4 py-2.5 rounded-full bg-raised text-ink text-sm">{notice}</div>
+        </div>
+      )}
 
       {/* ------------------------------------------------------------------ */}
       {/* PROFILE                                                            */}
@@ -1515,10 +1516,7 @@ function BayOrderingClientScreen() {
               </div>
 
               <button
-                onClick={() => {
-                  handleSwitchPortal();
-                  setShowProfileModal(false);
-                }}
+                onClick={handleSignOut}
                 className="w-full py-3 rounded-full bg-fill-soft hover:bg-fill text-muted hover:text-ink text-[14px] flex items-center justify-center gap-2"
               >
                 <LogOut className="h-4 w-4" />

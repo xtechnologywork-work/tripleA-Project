@@ -81,6 +81,10 @@ export default function AdminDashboardPage() {
   const [creditAdjustmentReason, setCreditAdjustmentReason] = useState<string>('Corporate VIP Complimentary Pass');
   const [historyModalClient, setHistoryModalClient] = useState<Employee | null>(null);
   const [bayLookup, setBayLookup] = useState('');
+  const [dispatchView, setDispatchView] = useState<'LIST' | 'BOARD'>('LIST');
+  const [clientPanelId, setClientPanelId] = useState<string | null>(null);
+  const [dragOrderId, setDragOrderId] = useState<string | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
   // In-app dialogs (replace the browser's confirm / prompt boxes)
   type AdminDialog = { kind: 'cancel' | 'qc' | 'issue' | 'cancelSub'; subId?: string } | null;
@@ -334,8 +338,9 @@ export default function AdminDashboardPage() {
   }, [employees, clientSearchQuery, clientSubFilter, subscriptions]);
 
   // Order Transition Handler
-  const handleTransition = (toStatus: OrderStatus, customAssigneeId?: string, note?: string) => {
-    if (!selectedOrder) return;
+  const handleTransition = (toStatus: OrderStatus, customAssigneeId?: string, note?: string, orderOverride?: Order) => {
+    const target = orderOverride || selectedOrder;
+    if (!target) return;
     try {
       const payload: Parameters<typeof mockStore.transitionOrder>[2] = {};
       const activeAssignee = customAssigneeId || assigneeId;
@@ -350,7 +355,7 @@ export default function AdminDashboardPage() {
           assignedAt: new Date().toISOString(),
         };
       } else if (toStatus === 'IN_PROGRESS') {
-        if (!selectedOrder.assignment) {
+        if (!target.assignment) {
           payload.assignment = {
             type: 'MEMBER',
             memberId: mem?.id || 'ft_01',
@@ -368,11 +373,11 @@ export default function AdminDashboardPage() {
           checkedAt: new Date().toISOString(),
         };
       } else if (toStatus === 'RETURNED_TO_PARKING') {
-        const targetBayCode = returnOverrideBay.trim() || selectedOrder.bayCodeSnapshot;
+        const targetBayCode = returnOverrideBay.trim() || target.bayCodeSnapshot;
         payload.returnConfirmation = {
-          bayId: selectedOrder.bayId,
-          matchesOriginalBay: targetBayCode.toUpperCase() === selectedOrder.bayCodeSnapshot.toUpperCase(),
-          overrideReason: targetBayCode !== selectedOrder.bayCodeSnapshot ? `Moved to bay ${targetBayCode}` : undefined,
+          bayId: target.bayId,
+          matchesOriginalBay: targetBayCode.toUpperCase() === target.bayCodeSnapshot.toUpperCase(),
+          overrideReason: targetBayCode !== target.bayCodeSnapshot ? `Moved to bay ${targetBayCode}` : undefined,
           confirmedBy: 'Tower Operations Lead',
           confirmedAt: new Date().toISOString(),
         };
@@ -392,16 +397,16 @@ export default function AdminDashboardPage() {
       const adminOperator: ActorContext = {
         type: 'STAFF',
         id: 'usr_ops_lead',
-        name: 'Tower Operations Dispatcher',
-        email: 'ops@triplea.qa',
+        name: adminEmail || 'Tower Operations Dispatcher',
+        email: adminEmail || 'ops@triplea.qa',
         role: 'SUPERADMIN',
       };
 
-      mockStore.transitionOrder(selectedOrder.id, toStatus, payload, adminOperator);
-      showToast(`Order ${selectedOrder.reference} updated to ${toStatus}`);
+      mockStore.transitionOrder(target.id, toStatus, payload, adminOperator);
+      showToast(`Order ${target.reference} updated to ${toStatus}`);
       reloadData();
     } catch (err: unknown) {
-      alert(`Action error: ${(err instanceof Error ? err.message : String(err))}`);
+      showToast(`Could not update: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -554,6 +559,96 @@ export default function AdminDashboardPage() {
   const stageIsCleaning = selectedOrder
     ? selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'QUALITY_CHECK'
     : false;
+
+  // ---- Board: four columns, drag a card forward to move it ----
+  const boardColumns: { key: string; title: string; statuses: OrderStatus[]; target: OrderStatus }[] = [
+    { key: 'NEW', title: 'New', statuses: ['NEW'], target: 'NEW' },
+    { key: 'ASSIGNED', title: 'Assigned', statuses: ['ASSIGNED'], target: 'ASSIGNED' },
+    { key: 'CLEANING', title: 'Cleaning', statuses: ['IN_PROGRESS', 'QUALITY_CHECK'], target: 'IN_PROGRESS' },
+    { key: 'READY', title: 'Ready at bay', statuses: ['COMPLETED', 'RETURNED_TO_PARKING'], target: 'RETURNED_TO_PARKING' },
+  ];
+
+  const moveOrderToColumn = (orderId: string, columnKey: string) => {
+    const order = orders.find((o) => o.id === orderId);
+    const column = boardColumns.find((c) => c.key === columnKey);
+    if (!order || !column) return;
+    if (column.statuses.includes(order.status)) return; // already there
+    if (!isValidStaffTransition(order.status, column.target, order.statusBeforeIssue)) {
+      showToast(`${order.reference} cannot go from ${order.status} to ${column.title}`);
+      return;
+    }
+    handleTransition(column.target, undefined, undefined, order);
+  };
+
+  // ---- Client panel ----
+  const panelClient = clientPanelId ? employees.find((e) => e.id === clientPanelId) || null : null;
+  const panelOrders = panelClient ? orders.filter((o) => o.employeeId === panelClient.id) : [];
+  const panelLedger = panelClient
+    ? mockStore
+        .getDb()
+        .credits.filter((c) => c.employeeId === panelClient.id)
+        .slice()
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    : [];
+
+  const csvCell = (value: string | number | undefined) => {
+    const text = String(value ?? '');
+    // A cell that starts with = + - @ could run as a formula in Excel; a leading quote makes it plain text
+    const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
+
+  const exportClientsCsv = () => {
+    const header = ['Name', 'Employee number', 'Phone', 'QID', 'Company', 'Pass', 'Wash balance', 'Orders'];
+    const rows = filteredClients.map((emp) => {
+      const sub = mockStore.getEmployeeSubscription(emp.id);
+      return [
+        emp.fullName,
+        emp.employeeNo || '',
+        emp.phone || '',
+        emp.qid || '',
+        emp.company || '',
+        sub && sub.status === 'ACTIVE' ? 'Active' : 'None',
+        mockStore.getCreditBalance(emp.id),
+        mockStore.getEmployeeOrders(emp.id).length,
+      ];
+    });
+    const csv = [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `clients-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ---- Analytics: the last 7 days and the order mix ----
+  const last7Days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - (6 - i));
+    return d;
+  }).map((day) => {
+    const next = new Date(day);
+    next.setDate(next.getDate() + 1);
+    const dayOrders = orders.filter((o) => {
+      const t = new Date(o.createdAt).getTime();
+      return t >= day.getTime() && t < next.getTime() && o.status !== 'CANCELLED';
+    });
+    const revenue = dayOrders
+      .filter((o) => o.paymentMode === 'ONE_TIME')
+      .reduce((sum, o) => sum + (o.priceSnapshot?.amountMinor || 0), 0) / 100;
+    return {
+      label: day.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }),
+      orders: dayOrders.length,
+      revenue,
+    };
+  });
+  const maxDayRevenue = Math.max(1, ...last7Days.map((d) => d.revenue));
+  const statusMix = (['NEW', 'ASSIGNED', 'IN_PROGRESS', 'QUALITY_CHECK', 'COMPLETED', 'RETURNED_TO_PARKING', 'CANCELLED', 'ISSUE_REPORTED'] as OrderStatus[])
+    .map((st) => ({ status: st, count: orders.filter((o) => o.status === st).length }))
+    .filter((x) => x.count > 0);
 
   const closeDialog = () => {
     setDialog(null);
@@ -794,6 +889,85 @@ export default function AdminDashboardPage() {
                 ? lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 : 'Syncing'}
             </span>
+            {activeTab === 'DISPATCH' && dispatchView === 'BOARD' && (
+            <div className="h-full overflow-x-auto px-8 pb-6">
+              <div className="grid grid-cols-4 gap-4 min-w-[980px] h-full">
+                {boardColumns.map((col) => {
+                  const cards = orders.filter((o) => col.statuses.includes(o.status));
+                  return (
+                    <div
+                      key={col.key}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragOverColumn(col.key);
+                      }}
+                      onDragLeave={() => setDragOverColumn((c) => (c === col.key ? null : c))}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (dragOrderId) moveOrderToColumn(dragOrderId, col.key);
+                        setDragOrderId(null);
+                        setDragOverColumn(null);
+                      }}
+                      className={`flex flex-col min-h-0 rounded-3xl p-3 transition ${dragOverColumn === col.key ? 'bg-raised ring-2 ring-[#2997ff]' : 'bg-inset'}`}
+                    >
+                      <div className="flex items-center justify-between px-2 py-2">
+                        <h3 className="text-sm font-semibold text-ink">{col.title}</h3>
+                        <span className="text-xs text-dim tabular-nums">{cards.length}</span>
+                      </div>
+                      <div className="flex-1 overflow-y-auto space-y-2 p-1 -m-1">
+                        {cards.length === 0 ? (
+                          <p className="text-xs text-dim text-center py-8">Nothing here</p>
+                        ) : (
+                          cards.map((o) => (
+                            <div
+                              key={o.id}
+                              draggable
+                              onDragStart={() => setDragOrderId(o.id)}
+                              onDragEnd={() => {
+                                setDragOrderId(null);
+                                setDragOverColumn(null);
+                              }}
+                              onClick={() => {
+                                setSelectedOrderId(o.id);
+                                setDispatchView('LIST');
+                              }}
+                              className="bg-tile hover:bg-tile-hover rounded-2xl p-4 cursor-grab active:cursor-grabbing space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[15px] font-semibold text-ink tabular-nums">Bay {o.bayCodeSnapshot}</span>
+                                {renderStatusPill(o.status)}
+                              </div>
+                              <div className="text-sm text-body tabular-nums">{o.vehicleSnapshot.plateNumber}</div>
+                              <div className="text-xs text-dim truncate">
+                                {employees.find((e) => e.id === o.employeeId)?.fullName || 'Client'} · {o.reference}
+                              </div>
+                              {o.assignment?.assignedName && (
+                                <div className="text-xs text-link-soft truncate">{o.assignment.assignedName}</div>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'DISPATCH' && dispatchView === 'LIST' && (
+              <div className="hidden md:flex items-center bg-tile rounded-full p-1 text-sm">
+                {(['LIST', 'BOARD'] as const).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setDispatchView(v)}
+                    className={`px-3.5 py-1 rounded-full transition ${dispatchView === v ? 'bg-raised-strong text-ink font-medium' : 'text-muted hover:text-ink'}`}
+                  >
+                    {v === 'LIST' ? 'List' : 'Board'}
+                  </button>
+                ))}
+              </div>
+            )}
             <button
               onClick={() => setSearchOpen(true)}
               className="hidden md:flex items-center gap-2 h-9 px-4 rounded-full bg-tile hover:bg-raised text-sm text-muted hover:text-ink transition"
@@ -1343,6 +1517,16 @@ export default function AdminDashboardPage() {
                   </select>
                 </div>
 
+                <div className="flex justify-end">
+                  <button
+                    onClick={exportClientsCsv}
+                    disabled={filteredClients.length === 0}
+                    className="px-4 py-2 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Export CSV ({filteredClients.length})
+                  </button>
+                </div>
+
                 <div className={`${card} overflow-x-auto`}>
                   <table className="w-full text-left text-sm border-collapse min-w-[860px]">
                     <thead>
@@ -1372,7 +1556,7 @@ export default function AdminDashboardPage() {
 
                           return (
                             <tr key={emp.id} className="hover:bg-fill-soft transition">
-                              <td className="py-3.5 px-5">
+                              <td className="py-3.5 px-5 cursor-pointer" onClick={() => setClientPanelId(emp.id)} title="Open client">
                                 <div className="flex items-center gap-3">
                                   <div className="w-9 h-9 rounded-full bg-raised flex items-center justify-center text-sm font-semibold text-ink flex-shrink-0">
                                     {emp.fullName.charAt(0)}
@@ -1749,6 +1933,46 @@ export default function AdminDashboardPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className={`${card} p-6 space-y-4 lg:col-span-2`}>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-semibold text-ink">Revenue, last 7 days</h3>
+                      <span className="text-sm text-dim tabular-nums">
+                        {last7Days.reduce((sum, d) => sum + d.revenue, 0).toLocaleString()} QAR
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-7 gap-3 items-end h-40">
+                      {last7Days.map((d) => (
+                        <div key={d.label} className="flex flex-col items-center justify-end gap-2 h-full">
+                          <span className="text-xs text-muted tabular-nums">{d.revenue > 0 ? d.revenue : ''}</span>
+                          <div
+                            className="w-full rounded-lg bg-[#0071e3]"
+                            style={{ height: `${Math.max(4, (d.revenue / maxDayRevenue) * 100)}%`, opacity: d.revenue > 0 ? 1 : 0.25 }}
+                            title={`${d.orders} orders`}
+                          />
+                          <span className="text-xs text-dim whitespace-nowrap">{d.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className={`${card} p-6 space-y-4`}>
+                    <h3 className="text-base font-semibold text-ink">Orders by status</h3>
+                    {statusMix.length === 0 ? (
+                      <p className="text-sm text-dim">No orders yet.</p>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {statusMix.map((x) => (
+                          <div key={x.status} className="flex items-center justify-between gap-3">
+                            {renderStatusPill(x.status)}
+                            <span className="text-sm text-ink tabular-nums font-semibold">{x.count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className={`${card} p-6 space-y-4`}>
                   <h3 className="text-base font-semibold text-ink">Field Technicians on Active Duty</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -1780,6 +2004,117 @@ export default function AdminDashboardPage() {
       {/* ---------------------------------------------------------------------- */}
       {/* LIGHTBOX                                                               */}
       {/* ---------------------------------------------------------------------- */}
+      {panelClient && (
+        <div className="fixed inset-0 z-40 bg-scrim" onClick={() => setClientPanelId(null)}>
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="Client"
+            className="absolute inset-y-0 end-0 w-full max-w-[460px] bg-sidebar overflow-y-auto p-6 space-y-5 animate-in slide-in-from-right duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-xl font-semibold text-ink tracking-tight truncate">{panelClient.fullName}</h3>
+                <p className="text-sm text-dim tabular-nums">
+                  {panelClient.employeeNo || ''} {panelClient.status === 'SUSPENDED' ? '· Suspended' : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => setClientPanelId(null)}
+                className="w-9 h-9 rounded-full bg-fill hover:bg-fill-strong text-ink flex items-center justify-center flex-shrink-0"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <dl className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-2xl bg-tile p-4">
+                <dt className="text-xs text-dim">Phone</dt>
+                <dd className="mt-1 text-ink tabular-nums">{panelClient.phone || '—'}</dd>
+              </div>
+              <div className="rounded-2xl bg-tile p-4">
+                <dt className="text-xs text-dim">QID</dt>
+                <dd className="mt-1 text-ink tabular-nums">{panelClient.qid || '—'}</dd>
+              </div>
+              <div className="rounded-2xl bg-tile p-4">
+                <dt className="text-xs text-dim">Wash balance</dt>
+                <dd className="mt-1 text-ink font-semibold tabular-nums">{mockStore.getCreditBalance(panelClient.id)}</dd>
+              </div>
+              <div className="rounded-2xl bg-tile p-4">
+                <dt className="text-xs text-dim">Pass</dt>
+                <dd className="mt-1 text-ink">
+                  {mockStore.getEmployeeSubscription(panelClient.id)?.status === 'ACTIVE' ? 'Active' : 'None'}
+                </dd>
+              </div>
+            </dl>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCreditModalClient(panelClient)}
+                className="flex-1 py-2.5 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink"
+              >
+                + Credits
+              </button>
+              {mockStore.getEmployeeSubscription(panelClient.id)?.status !== 'ACTIVE' && (
+                <button
+                  onClick={() => handleActivateSubscription(panelClient)}
+                  className="flex-1 py-2.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-sm text-white"
+                >
+                  Activate pass
+                </button>
+              )}
+            </div>
+
+            <section className="space-y-2">
+              <h4 className="text-sm font-semibold text-ink">Orders ({panelOrders.length})</h4>
+              {panelOrders.length === 0 ? (
+                <p className="text-sm text-dim">No orders yet.</p>
+              ) : (
+                panelOrders.map((o) => (
+                  <button
+                    key={o.id}
+                    onClick={() => {
+                      setSelectedOrderId(o.id);
+                      setActiveTab('DISPATCH');
+                      setDispatchView('LIST');
+                      setClientPanelId(null);
+                    }}
+                    className="w-full flex items-center justify-between gap-3 rounded-2xl bg-tile hover:bg-tile-hover px-4 py-3 text-start"
+                  >
+                    <span className="min-w-0">
+                      <span className="text-sm text-ink tabular-nums block">{o.reference} · Bay {o.bayCodeSnapshot}</span>
+                      <span className="text-xs text-dim tabular-nums">{formatDateTime(o.createdAt)}</span>
+                    </span>
+                    {renderStatusPill(o.status)}
+                  </button>
+                ))
+              )}
+            </section>
+
+            <section className="space-y-2 pb-6">
+              <h4 className="text-sm font-semibold text-ink">Wash credit history</h4>
+              {panelLedger.length === 0 ? (
+                <p className="text-sm text-dim">No credit activity yet.</p>
+              ) : (
+                panelLedger.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between gap-3 rounded-2xl bg-tile px-4 py-3">
+                    <span className="min-w-0">
+                      <span className="text-sm text-ink block truncate">{c.reason || c.type}</span>
+                      <span className="text-xs text-dim tabular-nums">{formatDateTime(c.createdAt)} · {c.type}</span>
+                    </span>
+                    <span className={`text-sm font-semibold tabular-nums ${c.delta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {c.delta > 0 ? '+' : ''}{c.delta}
+                    </span>
+                  </div>
+                ))
+              )}
+            </section>
+          </aside>
+        </div>
+      )}
+
       {dialog && (
         <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-md flex items-center justify-center p-4" onClick={closeDialog}>
           <div

@@ -20,6 +20,7 @@ import { ActorContext, hasPermission, getAllowedTransitions, isValidStaffTransit
 
 const STORAGE_KEY = 'cb_supabase_live_v2';
 const SYNC_CHANNEL_NAME = 'cb_cross_tab_sync';
+const EMPLOYEE_TOKEN_KEY = 'cb_employee_token';
 
 /** Unique ids: two actions in the same millisecond (or on two devices) can never collide. */
 export function uid(prefix: string): string {
@@ -63,6 +64,11 @@ class MockStore {
   private synced = new Map<string, string>();
   private inFlight = 0;
   private failStreak = 0;
+  private baselineLoaded = false; // nothing is sent until the server's copy has been loaded once
+  private pushing = false;
+  private pushAgain = false;
+  private lastServerJson = '';
+  private employeeToken: string | null = null;
   private authToken: string | null = null;
   private issueListeners: Array<(messages: string[]) => void> = [];
 
@@ -71,6 +77,10 @@ class MockStore {
       try {
         // Discard any legacy stale mock caches
         localStorage.removeItem('cb_mock_db_v1');
+      } catch {}
+
+      try {
+        this.employeeToken = localStorage.getItem(EMPLOYEE_TOKEN_KEY);
       } catch {}
 
       try {
@@ -115,6 +125,54 @@ class MockStore {
     this.authToken = token;
   }
 
+  public getEmployeeToken(): string | null {
+    return this.employeeToken;
+  }
+
+  public setEmployeeToken(token: string | null): void {
+    this.employeeToken = token;
+    try {
+      if (token) localStorage.setItem(EMPLOYEE_TOKEN_KEY, token);
+      else localStorage.removeItem(EMPLOYEE_TOKEN_KEY);
+    } catch {}
+  }
+
+  /** After the server confirms a sign in or sign up: remember the session and load this employee's data. */
+  public adoptEmployee(employee: Employee, token: string): void {
+    this.setEmployeeToken(token);
+    const db = this.getDb();
+    if (!db.employees.some((e) => e.id === employee.id)) db.employees.push(employee);
+    this.synced.set(`employees:${employee.id}`, JSON.stringify(employee));
+    this.saveLocalMirror();
+    this.notify();
+    void this.syncFromServer(true);
+  }
+
+  /** Sign out: forget the session and everything this browser holds about the employee. */
+  public signOutEmployee(): void {
+    this.setEmployeeToken(null);
+    try {
+      localStorage.removeItem('cb_active_employee_phone');
+      localStorage.removeItem('cb_active_actor');
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {}
+    this.db = null;
+    this.synced.clear();
+    this.baselineLoaded = false;
+    this.lastServerJson = '';
+    this.lastServerVersion = 0;
+    this.loadFromStorage();
+    this.notify();
+    void this.syncFromServer(true);
+  }
+
+  private authHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.authToken) headers.Authorization = `Bearer ${this.authToken}`;
+    if (this.employeeToken) headers['x-employee-token'] = this.employeeToken;
+    return headers;
+  }
+
   private notify(): void {
     for (const listener of this.listeners) {
       try {
@@ -142,7 +200,7 @@ class MockStore {
   private collectChanges(): { changes: Changes; count: number } {
     const changes: Changes = {};
     let count = 0;
-    if (!this.db) return { changes, count };
+    if (!this.db || !this.baselineLoaded) return { changes, count };
     for (const key of TRACKED) {
       for (const row of this.rowsOf(this.db, key)) {
         if (this.synced.get(`${key}:${row.id}`) !== JSON.stringify(row)) {
@@ -168,8 +226,13 @@ class MockStore {
 
   /** Send only the rows that changed. Never replaces the server's database. */
   private async pushChanges(): Promise<void> {
+    if (this.pushing) {
+      this.pushAgain = true;
+      return;
+    }
     const { changes, count } = this.collectChanges();
     if (count === 0 || typeof window === 'undefined') return;
+    this.pushing = true;
 
     // Snapshot what is being sent, so edits made while the request is running are not marked as saved
     const sent = new Map<string, string>();
@@ -181,10 +244,7 @@ class MockStore {
     try {
       const res = await fetch('/api/sync', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify({ changes }),
       });
       const data = await res.json().catch(() => ({}));
@@ -231,6 +291,11 @@ class MockStore {
       this.failStreak += 1;
     } finally {
       this.inFlight -= 1;
+      this.pushing = false;
+      if (this.pushAgain) {
+        this.pushAgain = false;
+        void this.pushChanges();
+      }
     }
   }
 
@@ -244,19 +309,25 @@ class MockStore {
     }
     this.isSyncing = true;
     try {
-      const res = await fetch(fresh ? '/api/sync?fresh=1' : '/api/sync', { cache: 'no-store' });
+      const res = await fetch(fresh ? '/api/sync?fresh=1' : '/api/sync', { cache: 'no-store', headers: this.authHeaders() });
       if (res.ok) {
         const data = await res.json();
         if (data.db && (data.source === 'supabase' || !this.db || data.version !== this.lastServerVersion)) {
           // Re-check: a change may have been made while the request was in flight
           if (this.db && this.hasUnsyncedChanges()) return;
           this.lastServerVersion = data.version;
+          const serialized = JSON.stringify(data.db);
+          const unchanged = this.baselineLoaded && serialized === this.lastServerJson;
+          this.lastServerJson = serialized;
+          if (unchanged) return; // same data as a moment ago: no re-render, no rewrite
           this.db = data.db;
+          this.baselineLoaded = true;
           this.markAllSynced(this.db!);
           this.saveLocalMirror();
           this.notify();
         } else if (!data.db && this.db) {
-          // Server is empty: send the local state once, as changes
+          // Server is empty (local demo mode): send the local state once, as changes
+          this.baselineLoaded = true;
           this.synced.clear();
           await this.pushChanges();
         }
@@ -640,107 +711,6 @@ class MockStore {
     this.saveToStorage();
   }
 
-  /**
-   * Guests have no account. Their orders belong to one shared "Guest" record, so they are
-   * never attached to a real employee and never touch anyone's wash credits.
-   */
-  public ensureGuestActor(): ActorContext {
-    const db = this.getDb();
-    const guestId = 'emp-guest';
-    if (!db.employees.some((e) => e.id === guestId)) {
-      db.employees.push({
-        id: guestId,
-        fullName: 'Guest customer',
-        email: 'guest@triplea.qa',
-        phone: '',
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-      });
-      this.saveToStorage();
-    }
-    return { type: 'EMPLOYEE', id: guestId, name: 'Guest customer', email: 'guest@triplea.qa' };
-  }
-
-  public findOrCreateEmployeeByPhone(rawPhone: string, fullName?: string): { employee: Employee; isNew: boolean } {
-    const db = this.getDb();
-    const digits = rawPhone.replace(/\D/g, '');
-    const cleanPhone = digits.length >= 8 ? digits.slice(-8) : digits;
-    const formattedPhone = `+974 ${cleanPhone.slice(0, 4)} ${cleanPhone.slice(4)}`;
-
-    const existing = db.employees.find((e) => {
-      const eDigits = (e.phone || '').replace(/\D/g, '');
-      return eDigits.endsWith(cleanPhone) || e.id === `emp-moci-${cleanPhone}`;
-    });
-
-    if (existing) {
-      return { employee: existing, isNew: false };
-    }
-
-    const newEmployee: Employee = {
-      id: `emp-moci-${cleanPhone}`,
-      employeeNo: `MOCI-${cleanPhone.slice(-4)}`,
-      fullName: fullName || `منسوب الوزارة (${cleanPhone})`,
-      email: `moci.${cleanPhone}@moci.gov.qa`,
-      phone: formattedPhone,
-      company: 'Ministry of Commerce and Industry - State of Qatar',
-      status: 'ACTIVE',
-      createdAt: new Date().toISOString(),
-    };
-
-    db.employees.unshift(newEmployee);
-    this.saveToStorage();
-    return { employee: newEmployee, isNew: true };
-  }
-
-  public registerEmployee(rawPhone: string, fullName: string, qid?: string, employeeNo?: string): Employee {
-    const db = this.getDb();
-    const digits = rawPhone.replace(/\D/g, '');
-    const cleanPhone = digits.length >= 8 ? digits.slice(-8) : digits;
-    const formattedPhone = `+974 ${cleanPhone.slice(0, 4)} ${cleanPhone.slice(4)}`;
-    const cleanQid = qid ? qid.replace(/\D/g, '').trim() : undefined;
-
-    const existing = db.employees.find((e) => {
-      const eDigits = (e.phone || '').replace(/\D/g, '');
-      return eDigits.endsWith(cleanPhone) || e.id === `emp-moci-${cleanPhone}`;
-    });
-
-    if (existing) {
-      let updated = false;
-      if (fullName && fullName.trim()) {
-        existing.fullName = fullName.trim();
-        updated = true;
-      }
-      if (cleanQid) {
-        existing.qid = cleanQid;
-        updated = true;
-      }
-      if (employeeNo && employeeNo.trim()) {
-        existing.employeeNo = employeeNo.trim();
-        updated = true;
-      }
-      if (updated) {
-        this.saveToStorage();
-      }
-      return existing;
-    }
-
-    const newEmployee: Employee = {
-      id: `emp-moci-${cleanPhone}`,
-      employeeNo: employeeNo && employeeNo.trim() ? employeeNo.trim() : `MOCI-${cleanPhone.slice(-4)}`,
-      fullName: fullName.trim() || `منسوب الوزارة (${cleanPhone})`,
-      email: `moci.${cleanPhone}@moci.gov.qa`,
-      phone: formattedPhone,
-      qid: cleanQid,
-      company: 'Ministry of Commerce and Industry - State of Qatar',
-      status: 'ACTIVE',
-      createdAt: new Date().toISOString(),
-    };
-
-    db.employees.unshift(newEmployee);
-    this.saveToStorage();
-    return newEmployee;
-  }
-
   public getEmployeeByPhone(rawPhone: string): Employee | undefined {
     const db = this.getDb();
     const digits = rawPhone.replace(/\D/g, '');
@@ -808,25 +778,7 @@ class MockStore {
   }
 
   public getEmployeeVehicles(employeeId: string): Vehicle[] {
-    const db = this.getDb();
-    let vehicles = db.vehicles.filter((v) => v.employeeId === employeeId);
-    if (vehicles.length === 0) {
-      // Provide a clean default registered vehicle
-      const defaultVeh: Vehicle = {
-        id: `veh-${employeeId}-01`,
-        employeeId,
-        plateNumber: '559201',
-        plateType: 'Private',
-        make: 'Porsche',
-        model: 'Panamera',
-        color: 'Jet Black Metallic',
-        isDefault: true,
-      };
-      db.vehicles.push(defaultVeh);
-      this.saveToStorage();
-      vehicles = [defaultVeh];
-    }
-    return vehicles;
+    return this.getDb().vehicles.filter((v) => v.employeeId === employeeId);
   }
 
   public saveEmployeeVehicle(employeeId: string, vehicleData: Partial<Vehicle>): Vehicle {

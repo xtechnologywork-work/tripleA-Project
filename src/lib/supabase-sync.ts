@@ -39,6 +39,50 @@ export async function isSchemaV2(sb: SupabaseClient): Promise<boolean> {
   return schemaV2.ready;
 }
 
+export function mapEmployeeRow(e: Row): Employee {
+  return {
+    id: String(e.id),
+    employeeNo: e.employee_no ? String(e.employee_no) : undefined,
+    fullName: String(e.full_name || ''),
+    email: e.email ? String(e.email) : '',
+    phone: e.phone ? String(e.phone) : '',
+    qid: e.qid ? String(e.qid) : undefined,
+    company: e.company ? String(e.company) : undefined,
+    status: (e.status === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE') as 'ACTIVE' | 'SUSPENDED',
+    createdAt: e.created_at ? String(e.created_at) : new Date().toISOString(),
+  };
+}
+
+/** Find an employee by their 8-digit Qatar mobile number. */
+export async function findEmployeeByPhone(last8: string): Promise<Employee | null> {
+  const sb = getServerSupabase();
+  if (!sb) return null;
+  const spaced = `${last8.slice(0, 4)} ${last8.slice(4)}`;
+  const { data } = await sb
+    .from('employees')
+    .select('*')
+    .or(`phone.ilike.%${last8}%,phone.ilike.%${spaced}%`)
+    .limit(20);
+  const hit = (data || []).find((r: Row) => String(r.phone || '').replace(/\D/g, '').endsWith(last8));
+  return hit ? mapEmployeeRow(hit) : null;
+}
+
+export async function createEmployee(employee: Employee): Promise<{ ok: boolean; error?: string }> {
+  const sb = getServerSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  const { error } = await sb.from('employees').insert({
+    id: employee.id,
+    employee_no: employee.employeeNo || null,
+    full_name: employee.fullName,
+    email: employee.email || null,
+    phone: employee.phone || null,
+    qid: employee.qid || null,
+    company: employee.company || 'Ministry of Commerce and Industry - State of Qatar',
+    status: 'ACTIVE',
+  });
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
 // -----------------------------------------------------------------------------
 // READ: the whole operational state, assembled from the tables
 // -----------------------------------------------------------------------------
@@ -194,14 +238,28 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       active: Boolean(z.active ?? true),
     }));
 
-    const photos: OrderPhoto[] = (photosRes.data || []).map((p: Row) => ({
-      id: String(p.id),
-      orderId: String(p.order_id),
-      kind: (p.kind || 'BEFORE') as OrderPhoto['kind'],
-      blobKey: String(p.storage_path || p.blobKey || ''),
-      uploadedBy: String(p.uploaded_by || 'staff'),
-      createdAt: String(p.captured_at || p.createdAt || new Date().toISOString()),
-    }));
+    // Photos live in a private bucket: hand out short-lived signed links, never public ones
+    const storagePaths = (photosRes.data || [])
+      .map((p: Row) => String(p.storage_path || ''))
+      .filter((x: string) => x.startsWith('storage:'))
+      .map((x: string) => x.slice('storage:'.length));
+    const signed = new Map<string, string>();
+    if (storagePaths.length > 0) {
+      const { data: links } = await sb.storage.from(PHOTO_BUCKET).createSignedUrls(storagePaths, 3600);
+      for (const l of links || []) if (l.path && l.signedUrl) signed.set(l.path, l.signedUrl);
+    }
+
+    const photos: OrderPhoto[] = (photosRes.data || []).map((p: Row) => {
+      const raw = String(p.storage_path || p.blobKey || '');
+      return {
+        id: String(p.id),
+        orderId: String(p.order_id),
+        kind: (p.kind || 'BEFORE') as OrderPhoto['kind'],
+        blobKey: raw.startsWith('storage:') ? signed.get(raw.slice('storage:'.length)) || '' : raw,
+        uploadedBy: String(p.uploaded_by || 'staff'),
+        createdAt: String(p.captured_at || p.createdAt || new Date().toISOString()),
+      };
+    });
 
     const orderEvents: OrderEvent[] = (eventsRes.data || []).map((ev: Row) => ({
       id: String(ev.id),
@@ -240,24 +298,10 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       createdAt: String(a.created_at || new Date().toISOString()),
     }));
 
-    // Numbered parking bays: 1 to TOTAL_BAYS, all under the first zone
-    const bays = [];
-    const qrTokens = [];
+    // Bays are plain numbers 1 to 1288; the app creates them on demand, so they are not sent
+    const bays: MockDatabase['bays'] = [];
+    const qrTokens: MockDatabase['qrTokens'] = [];
     const targetZones = zones.length > 0 ? zones : [{ id: 'zone-main', code: 'P', name: 'Tower Parking', active: true }];
-    const bayZoneId = targetZones[0].id;
-    for (let i = 1; i <= TOTAL_BAYS; i++) {
-      const bayCode = String(i);
-      const bayId = `bay-${i}`;
-      bays.push({ id: bayId, zoneId: bayZoneId, code: bayCode, active: true });
-      qrTokens.push({
-        id: `qr-${bayCode}`,
-        bayId,
-        token: `tk_${bayCode}_${i * 137}`,
-        version: 1,
-        status: 'ACTIVE' as const,
-        createdAt: new Date().toISOString(),
-      });
-    }
 
     const db: MockDatabase = {
       schemaVersion: 1,
@@ -373,7 +417,7 @@ async function nextReference(sb: SupabaseClient, createdAt: string): Promise<str
 
 async function ensurePhotoBucket(sb: SupabaseClient): Promise<boolean> {
   if (!hasServiceKey()) return false;
-  const { error } = await sb.storage.createBucket(PHOTO_BUCKET, { public: true });
+  const { error } = await sb.storage.createBucket(PHOTO_BUCKET, { public: false });
   if (error && !/already exists/i.test(error.message)) {
     console.warn('Photo bucket unavailable:', error.message);
     return false;
@@ -394,7 +438,8 @@ async function uploadPhoto(sb: SupabaseClient, photo: OrderPhoto): Promise<strin
     console.warn('Photo upload failed:', error.message);
     return null;
   }
-  return sb.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
+  const { data: link } = await sb.storage.from(PHOTO_BUCKET).createSignedUrl(path, 3600);
+  return link ? `storage:${path}|${link.signedUrl}` : null;
 }
 
 /**
@@ -403,13 +448,28 @@ async function uploadPhoto(sb: SupabaseClient, photo: OrderPhoto): Promise<strin
  * - only an admin can move an order through its stages, adjust credits, or cancel a pass
  * Every admin stage change must follow the status rules.
  */
-export async function applyChanges(changes: SyncChanges, isAdmin: boolean): Promise<ApplyResult> {
+export interface Identity {
+  admin: boolean;
+  employeeId?: string;
+}
+
+export async function applyChanges(input: SyncChanges, identity: Identity): Promise<ApplyResult> {
   const result: ApplyResult = { ok: true, referenceFixes: {}, photoUrls: {}, rejected: [] };
   const sb = getServerSupabase();
   if (!sb) return { ...result, ok: false, error: 'Supabase is not configured' };
+  const isAdmin = identity.admin;
+  let changes = input;
 
   try {
     const v2 = await isSchemaV2(sb);
+
+    // An employee's changes are checked row by row against their own account. One bad row refuses the whole batch.
+    if (!isAdmin) {
+      if (!identity.employeeId) return { ...result, ok: false, error: 'Sign in first' };
+      const checked = await validateEmployeeBatch(sb, input, identity.employeeId);
+      if (checked.errors.length > 0) return { ...result, rejected: checked.errors };
+      changes = checked.fixed;
+    }
 
     // ---- employees and vehicles: profile data, open to the customer flow ----
     if (changes.employees?.length) {
@@ -593,13 +653,14 @@ export async function applyChanges(changes: SyncChanges, isAdmin: boolean): Prom
     if (changes.photos?.length) {
       const rows: Row[] = [];
       for (const p of changes.photos) {
-        const url = await uploadPhoto(sb, p);
-        if (url) result.photoUrls[p.id] = url;
+        const uploaded = await uploadPhoto(sb, p);
+        const [storedPath, signedUrl] = uploaded ? uploaded.split('|') : ['', ''];
+        if (signedUrl) result.photoUrls[p.id] = signedUrl;
         const row: Row = {
           id: p.id,
           order_id: p.orderId,
           kind: p.kind,
-          storage_path: url || p.blobKey,
+          storage_path: storedPath || p.blobKey,
           captured_at: p.createdAt,
         };
         if (v2) row.uploaded_by = p.uploadedBy;
@@ -667,4 +728,235 @@ export async function applyChanges(changes: SyncChanges, isAdmin: boolean): Prom
     console.warn('applyChanges failed:', err);
     return { ...result, ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// -----------------------------------------------------------------------------
+// SECURITY: what an employee is allowed to save (everything else is refused)
+// -----------------------------------------------------------------------------
+const MAX_PHOTO_CHARS = 4_200_000; // about 3 MB of image
+
+async function validateEmployeeBatch(
+  sb: SupabaseClient,
+  changes: SyncChanges,
+  me: string
+): Promise<{ errors: string[]; fixed: SyncChanges }> {
+  const errors: string[] = [];
+  const fixed: SyncChanges = { ...changes };
+
+  // ---- load what the checks need ----
+  const orderIds = new Set<string>([
+    ...(changes.orders || []).map((o) => o.id),
+    ...(changes.photos || []).map((x) => x.orderId),
+    ...(changes.orderEvents || []).map((x) => x.orderId),
+    ...(changes.credits || []).map((x) => x.orderId || ''),
+  ]);
+  orderIds.delete('');
+
+  const [orderRes, ledgerRes, subsRes, svcRes, pkgRes, meRes] = await Promise.all([
+    orderIds.size ? sb.from('orders').select('id,employee_id,status,credits_used').in('id', Array.from(orderIds)) : Promise.resolve({ data: [] as Row[] }),
+    sb.from('credit_ledger').select('id,order_id,amount,type,details').eq('employee_id', me),
+    sb.from('employee_subscriptions').select('id,status').eq('employee_id', me),
+    sb.from('services').select('price_minor').order('sort_order', { ascending: true }).limit(1),
+    sb.from('subscription_packages').select('id,price_minor'),
+    sb.from('employees').select('*').eq('id', me).limit(1),
+  ]);
+
+  const dbOrders = new Map<string, Row>((orderRes.data || []).map((r: Row) => [String(r.id), r]));
+  const ledger = (ledgerRes.data || []) as Row[];
+  const ledgerIds = new Set(ledger.map((r) => String(r.id)));
+  const dbSubs = (subsRes.data || []) as Row[];
+  const servicePrice = Number((svcRes.data || [])[0]?.price_minor || 2000);
+  const packages = (pkgRes.data || []) as Row[];
+  const packagePrice = Number(packages[0]?.price_minor || 14000);
+  const myRow = (meRes.data || [])[0] as Row | undefined;
+  const allowedPrices = new Set([servicePrice, packagePrice]);
+
+  const batchOrders = new Map<string, Order>((changes.orders || []).map((o) => [o.id, o]));
+  const isMyOrder = (id?: string) => {
+    if (!id) return false;
+    const inBatch = batchOrders.get(id);
+    if (inBatch) return inBatch.employeeId === me;
+    const inDb = dbOrders.get(id);
+    return !!inDb && String(inDb.employee_id) === me;
+  };
+  const orderStatus = (id: string): string | undefined =>
+    batchOrders.get(id)?.status || (dbOrders.get(id)?.status ? String(dbOrders.get(id)!.status) : undefined);
+
+  // ---- profile: only name, phone and QID, only your own ----
+  if (changes.employees?.length) {
+    const next: Employee[] = [];
+    for (const e of changes.employees) {
+      if (e.id !== me || !myRow) {
+        errors.push('profile: you can only edit your own profile');
+        continue;
+      }
+      const name = (e.fullName || '').trim();
+      const digits = (e.phone || '').replace(/\D/g, '');
+      const qid = (e.qid || '').replace(/\D/g, '');
+      if (name.length < 2 || name.length > 80) errors.push('profile: name must be 2 to 80 characters');
+      if (digits.length < 8 || digits.length > 15) errors.push('profile: phone number is not valid');
+      if (qid.length > 11) errors.push('profile: QID is too long');
+      const current = mapEmployeeRow(myRow);
+      next.push({ ...current, fullName: name, phone: e.phone, qid: qid || undefined });
+    }
+    fixed.employees = next;
+  }
+
+  // ---- vehicles ----
+  for (const v of changes.vehicles || []) {
+    if (v.employeeId !== me) errors.push('vehicle: not yours');
+    if ((v.plateNumber || '').length > 20 || (v.make || '').length > 40 || (v.model || '').length > 40 || (v.color || '').length > 40) {
+      errors.push('vehicle: a field is too long');
+    }
+  }
+
+  // ---- orders ----
+  const keptOrders: Order[] = [];
+  for (const o of changes.orders || []) {
+    if (o.employeeId !== me) {
+      errors.push(`order ${o.reference}: not yours`);
+      continue;
+    }
+    const current = dbOrders.get(o.id);
+    if (!current) {
+      const bay = Number(o.bayCodeSnapshot);
+      if (o.status !== 'NEW') errors.push(`order ${o.reference}: a new order must start as NEW`);
+      if (!Number.isInteger(bay) || bay < 1 || bay > TOTAL_BAYS) errors.push(`order ${o.reference}: bay must be 1 to ${TOTAL_BAYS}`);
+      if (!allowedPrices.has(Number(o.priceSnapshot?.amountMinor))) errors.push(`order ${o.reference}: price does not match`);
+      if (!['ONE_TIME', 'CREDIT'].includes(o.paymentMode)) errors.push(`order ${o.reference}: payment mode is not valid`);
+      if (!(o.creditsUsed >= 0 && o.creditsUsed <= 1)) errors.push(`order ${o.reference}: credits used is not valid`);
+      if ((o.instructions || '').length > 500) errors.push(`order ${o.reference}: notes are too long`);
+      // Staff-only fields cannot be set by a customer
+      keptOrders.push({
+        ...o,
+        status: 'NEW',
+        assignment: undefined,
+        qualityCheck: undefined,
+        returnConfirmation: undefined,
+        cancellation: undefined,
+        statusBeforeIssue: undefined,
+        version: 1,
+      });
+      continue;
+    }
+    // Existing order: the only customer action is to cancel while it is still NEW
+    const from = String(current.status);
+    if (o.status === from) continue; // nothing to save
+    if (!(from === 'NEW' && o.status === 'CANCELLED')) {
+      errors.push(`order ${o.reference}: you can only cancel an order that is still new`);
+      continue;
+    }
+    keptOrders.push(o);
+  }
+  fixed.orders = keptOrders;
+
+  // ---- passes: one active pass at most, from a real package ----
+  const newSubs = (changes.subscriptions || []).filter((x) => !dbSubs.some((d) => String(d.id) === x.id));
+  const hasActiveInDb = dbSubs.some((d) => String(d.status) === 'ACTIVE');
+  for (const sub of newSubs) {
+    if (sub.employeeId !== me) errors.push('pass: not yours');
+    if (sub.status !== 'ACTIVE') errors.push('pass: a new pass must be ACTIVE');
+    if (hasActiveInDb) errors.push('pass: you already have an active pass');
+    if (!packages.some((pk) => String(pk.id) === sub.packageId)) errors.push('pass: package does not exist');
+  }
+  if (newSubs.length > 1) errors.push('pass: only one pass can be activated at a time');
+  for (const sub of changes.subscriptions || []) {
+    if (dbSubs.some((d) => String(d.id) === sub.id)) {
+      errors.push('pass: an existing pass can only be changed by staff');
+    }
+  }
+  fixed.subscriptions = newSubs;
+
+  // ---- credits: debit your own order, refund a cancelled one, or grant the pass you just bought ----
+  let balance = ledger.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  const newCredits: CreditLedgerEntry[] = [];
+  for (const c of changes.credits || []) {
+    if (ledgerIds.has(c.id)) continue; // already saved
+    if (c.employeeId !== me) {
+      errors.push('credit: not yours');
+      continue;
+    }
+    if (c.type === 'DEBIT') {
+      if (!(c.delta < 0 && c.delta >= -3) || !isMyOrder(c.orderId)) errors.push('credit: this debit is not valid');
+    } else if (c.type === 'REFUND') {
+      const status = c.orderId ? orderStatus(c.orderId) : undefined;
+      const used = c.orderId ? Number(batchOrders.get(c.orderId)?.creditsUsed ?? dbOrders.get(c.orderId)?.credits_used ?? 0) : 0;
+      const alreadyRefunded = ledger.some(
+        (r) => String(r.order_id) === c.orderId && (String(r.type) === 'REFUND' || String((r.details as Row | null)?.type) === 'REFUND')
+      );
+      if (!(c.delta > 0) || !isMyOrder(c.orderId) || status !== 'CANCELLED' || used !== c.delta || alreadyRefunded) {
+        errors.push('credit: this refund is not valid');
+      }
+    } else if (c.type === 'GRANT') {
+      const forNewPass = !!c.subscriptionId && newSubs.some((x) => x.id === c.subscriptionId);
+      if (c.delta !== 8 || !forNewPass) errors.push('credit: this grant is not valid');
+    } else {
+      errors.push('credit: only staff can adjust credits');
+    }
+    balance += c.delta;
+    newCredits.push(c);
+  }
+  if (balance < 0) errors.push('credit: not enough washes left');
+  fixed.credits = newCredits;
+
+  // ---- photos, timeline, audit ----
+  for (const ph of changes.photos || []) {
+    if (!isMyOrder(ph.orderId)) errors.push('photo: not for your order');
+    if (!/^data:image\//.test(ph.blobKey) && !/^https?:\/\//.test(ph.blobKey)) errors.push('photo: not an image');
+    if (ph.blobKey.length > MAX_PHOTO_CHARS) errors.push('photo: the image is too large');
+  }
+  for (const ev of changes.orderEvents || []) {
+    if (!isMyOrder(ev.orderId) || ev.actor.id !== me) errors.push('timeline: not yours');
+    if (ev.to && !['NEW', 'CANCELLED'].includes(ev.to)) errors.push('timeline: not allowed');
+  }
+  for (const a of changes.auditLogs || []) {
+    if (a.actor.id !== me) errors.push('audit: not yours');
+  }
+  if ((changes.issues || []).length > 0) errors.push('issues: only staff can report issues');
+  fixed.issues = [];
+
+  return { errors: Array.from(new Set(errors)), fixed };
+}
+
+// -----------------------------------------------------------------------------
+// SECURITY: who gets to see what
+// -----------------------------------------------------------------------------
+/**
+ * - admin: everything
+ * - employee: their own account, orders, passes, credits and photos; the price list; nobody else
+ * - nobody signed in: the price list only (no people, no orders)
+ */
+export function scopeState(db: MockDatabase, identity: Identity): MockDatabase {
+  if (identity.admin) return db;
+
+  const me = identity.employeeId;
+  const catalogue: MockDatabase = {
+    ...db,
+    staff: [],
+    fieldMembers: [],
+    fieldTeams: [],
+    employees: [],
+    vehicles: [],
+    subscriptions: [],
+    credits: [],
+    orders: [],
+    photos: [],
+    orderEvents: [],
+    issues: [],
+    auditLogs: [],
+  };
+  if (!me) return catalogue;
+
+  const mine = db.orders.filter((o) => o.employeeId === me);
+  const mineIds = new Set(mine.map((o) => o.id));
+  return {
+    ...catalogue,
+    employees: db.employees.filter((e) => e.id === me),
+    vehicles: db.vehicles.filter((v) => v.employeeId === me),
+    subscriptions: db.subscriptions.filter((x) => x.employeeId === me),
+    credits: db.credits.filter((c) => c.employeeId === me),
+    orders: mine,
+    photos: db.photos.filter((x) => mineIds.has(x.orderId)),
+    orderEvents: db.orderEvents.filter((x) => mineIds.has(x.orderId)),
+  };
 }
