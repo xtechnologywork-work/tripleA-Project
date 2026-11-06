@@ -779,10 +779,17 @@ export default function AdminDashboardPage() {
   const canGo = (to: OrderStatus) =>
     !!selectedOrder && isValidStaffTransition(selectedOrder.status, to, selectedOrder.statusBeforeIssue);
 
-  const stageShell = (active: boolean) =>
+  // Stages open one by one: inspection, then assign, then wash, then ready
+  const inspectionDone = !inspectionEnabled || isCleared(selectedBefore);
+  const st = selectedOrder?.status;
+  const open2 = inspectionDone && canGo('ASSIGNED');
+  const open3 = inspectionDone && canGo('IN_PROGRESS') && st !== 'NEW';
+  const open4 = canGo('RETURNED_TO_PARKING') && st !== 'NEW' && st !== 'ASSIGNED';
+  const lockHint = !inspectionDone ? 'Send the inspection first' : 'Finish the previous stage first';
+  const stageShell = (active: boolean, locked = false) =>
     `rounded-2xl p-4 flex flex-col justify-between gap-4 transition ${
       active ? 'bg-raised ring-2 ring-[#2997ff]' : 'bg-inset'
-    }`;
+    } ${locked ? 'opacity-50' : ''}`;
   const stagePrimary =
     'w-full py-2.5 rounded-full text-sm font-semibold transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed';
 
@@ -1141,7 +1148,7 @@ export default function AdminDashboardPage() {
                         </div>
 
                         {/* Stage 2 */}
-                        <div className={stageShell(selectedOrder.status === 'ASSIGNED')}>
+                        <div className={stageShell(selectedOrder.status === 'ASSIGNED', !open2 && selectedOrder.status !== 'ASSIGNED' && !selectedOrder.assignment)}>
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-semibold text-dim">Stage 2</span>
@@ -1156,16 +1163,16 @@ export default function AdminDashboardPage() {
                           </div>
                           <button
                             onClick={() => handleTransition('ASSIGNED')}
-                            disabled={!canGo('ASSIGNED') || selectedOrder.status === 'ASSIGNED'}
+                            disabled={!open2 || selectedOrder.status === 'ASSIGNED'}
                             className={`${stagePrimary} bg-[#0071e3] hover:bg-[#0077ed] text-white`}
                           >
                             <User className="h-4 w-4" />
-                            <span>{selectedOrder.status === 'ASSIGNED' ? 'Team assigned' : 'Assign team'}</span>
+                            <span>{selectedOrder.status === 'ASSIGNED' ? 'Team assigned' : !open2 && st === 'NEW' ? lockHint : 'Assign team'}</span>
                           </button>
                         </div>
 
                         {/* Stage 3 */}
-                        <div className={stageShell(stageIsCleaning)}>
+                        <div className={stageShell(stageIsCleaning, !open3 && !stageIsCleaning && !stageIsReady)}>
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-semibold text-dim">Stage 3</span>
@@ -1178,7 +1185,7 @@ export default function AdminDashboardPage() {
                           </div>
                           <button
                             onClick={() => handleTransition('IN_PROGRESS')}
-                            disabled={!canGo('IN_PROGRESS') || washLocked}
+                            disabled={!open3 || washLocked}
                             className={`${stagePrimary} ${
                               selectedOrder.status === 'IN_PROGRESS'
                                 ? 'bg-amber-400/15 text-amber-300 hover:bg-amber-400/25'
@@ -1186,12 +1193,12 @@ export default function AdminDashboardPage() {
                             }`}
                           >
                             <Sparkles className="h-4 w-4" />
-                            <span>{selectedOrder.status === 'IN_PROGRESS' ? 'Detailing Active' : washLocked ? 'Inspect the car first' : 'Start Wash'}</span>
+                            <span>{selectedOrder.status === 'IN_PROGRESS' ? 'Detailing Active' : !open3 ? (st === 'NEW' ? lockHint : washLocked ? 'Inspect the car first' : 'Start Wash') : 'Start Wash'}</span>
                           </button>
                         </div>
 
                         {/* Stage 4 */}
-                        <div className={stageShell(stageIsReady)}>
+                        <div className={stageShell(stageIsReady, !open4 && !stageIsReady)}>
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-semibold text-dim">Stage 4</span>
@@ -1206,7 +1213,7 @@ export default function AdminDashboardPage() {
                           </div>
                           <button
                             onClick={() => handleTransition('RETURNED_TO_PARKING')}
-                            disabled={!canGo('RETURNED_TO_PARKING')}
+                            disabled={!open4}
                             className={`${stagePrimary} ${
                               stageIsReady
                                 ? 'bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25'
@@ -1214,7 +1221,7 @@ export default function AdminDashboardPage() {
                             }`}
                           >
                             <CheckCircle2 className="h-4 w-4" />
-                            <span>{selectedOrder.status === 'RETURNED_TO_PARKING' ? 'Confirmed Ready' : 'Mark Ready'}</span>
+                            <span>{selectedOrder.status === 'RETURNED_TO_PARKING' ? 'Confirmed Ready' : !open4 && (st === 'NEW' || st === 'ASSIGNED') ? lockHint : 'Mark Ready'}</span>
                           </button>
                         </div>
                       </div>
