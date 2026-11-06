@@ -331,6 +331,16 @@ function BayOrderingClientScreen() {
   const activeSub = currentEmployee ? mockStore.getEmployeeSubscription(currentEmployee.id) : undefined;
   const hasActiveSubscription = !!activeSub;
   const employeeCredits = currentEmployee ? mockStore.getCreditBalance(currentEmployee.id) : 0;
+  // The pass started with this many washes; the card counts down from it
+  const passTotal = activeSub
+    ? Math.max(
+        employeeCredits,
+        mockStore
+          .getDb()
+          .credits.filter((c) => c.subscriptionId === activeSub.id && c.type === 'GRANT')
+          .reduce((sum, c) => sum + c.delta, 0)
+      )
+    : 0;
   const employeeOrders = currentEmployee ? mockStore.getEmployeeOrders(currentEmployee.id) : [];
   // Orders that are not finished yet: shown at the top so the tracking page is always one tap away
   const activeOrders = employeeOrders.filter((o) => o.status !== 'RETURNED_TO_PARKING' && o.status !== 'CANCELLED');
@@ -1004,6 +1014,55 @@ function BayOrderingClientScreen() {
             </Link>
           )}
 
+          {/* Your pass: how many washes are left, updated live */}
+          {hasActiveSubscription && (
+            <section aria-label={t('passCardTitle')} className={`${tile} p-5 md:p-6 space-y-5`}>
+              <div className="flex items-end justify-between gap-4">
+                <div>
+                  <p className="text-sm text-muted">{t('passCardTitle')}</p>
+                  <p className="mt-1 text-[44px] leading-none font-semibold tracking-[-0.02em] text-ink tabular-nums">
+                    {employeeCredits}
+                    <span className="ms-2 text-[17px] font-normal tracking-normal text-muted lowercase">
+                      {t('passOfLabel')} {passTotal} {t('washesLeftLabel')}
+                    </span>
+                  </p>
+                </div>
+                {activeOrders.length > 0 && (
+                  <span className="inline-flex px-3 py-1 rounded-full bg-[#2997ff]/15 text-sm font-medium text-link-soft whitespace-nowrap">
+                    {activeOrders.length} {t('passInProgressLabel')}
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-1.5" aria-hidden="true">
+                {Array.from({ length: passTotal }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`h-1.5 flex-1 rounded-full transition-colors duration-500 ${i < employeeCredits ? 'bg-[#2997ff]' : 'bg-fill'}`}
+                  />
+                ))}
+              </div>
+              {employeeCredits > 0 && (
+                <button
+                  onClick={() =>
+                    setSelectedPlan({
+                      id: 'one-time',
+                      title: t('oneTimeWash'),
+                      subtitle: t('oneTimeDesc'),
+                      price: 20,
+                      creditsCost: 1,
+                      paymentMode: 'CREDIT',
+                      badge: t('mociBenefitBadge'),
+                    })
+                  }
+                  className={`${primaryBtn} w-full py-3.5 text-[15px] active:scale-95`}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  <span>{t('orderWithPassBtn')}</span>
+                </button>
+              )}
+            </section>
+          )}
+
           {/* Plans */}
           <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {(
@@ -1027,7 +1086,7 @@ function BayOrderingClientScreen() {
                     badge: t('mociBenefitBadge'),
                   },
                 })}
-                {renderPlanTile({
+                {!hasActiveSubscription && renderPlanTile({
                   image: '/images/subscription-car.jpg',
                   imageAlt: 'BMW Sedan Rear',
                   badge: t('bestValueBadge'),
