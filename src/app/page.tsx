@@ -44,6 +44,7 @@ import {
 
 import { EmployeeNotifications } from '@/components/notifications/employee-notifications';
 import { AddToHomeScreen } from '@/components/notifications/add-to-home-screen';
+import { StatusBadge } from '@/components/ui/status-badge';
 
 type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
 
@@ -828,25 +829,25 @@ function BayOrderingClientScreen() {
       tabIndex={0}
       onClick={() => setSelectedPlan(opts.plan)}
       onKeyDown={activate(() => setSelectedPlan(opts.plan))}
-      className={`group ${tile} overflow-hidden cursor-pointer flex flex-col hover:bg-tile-hover transition-colors`}
+      className={`group ${tile} overflow-hidden cursor-pointer flex flex-col hover:bg-tile-hover active:scale-[0.99] transition`}
     >
-      <div className="relative h-52 md:h-60 overflow-hidden">
+      <div className="relative h-44 md:h-56 overflow-hidden">
         <Image
           src={opts.image}
           alt={opts.imageAlt}
           fill
+          sizes="(min-width: 768px) 540px, 100vw"
           className="object-cover object-center group-hover:scale-[1.03] transition-transform duration-500"
         />
-        <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-tile to-transparent" />
-        <span className="absolute top-4 start-4 inline-flex px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-sm text-zinc-100">
+        <span className="absolute top-4 start-4 inline-flex px-3 py-1 rounded-full bg-black/70 text-sm text-white">
           {opts.badge}
         </span>
       </div>
 
-      <div className="p-6 md:p-6 flex flex-col gap-5 flex-1">
-        <div className="space-y-2">
-          <h3 className="text-[21px] font-semibold tracking-tight leading-tight text-ink">{opts.title}</h3>
-          <p className="text-base text-muted leading-snug">{opts.desc}</p>
+      <div className="p-5 md:p-6 flex flex-col gap-5 flex-1">
+        <div className="space-y-1.5">
+          <h3 className="text-[22px] font-semibold tracking-[-0.01em] leading-tight text-ink">{opts.title}</h3>
+          <p className="text-[15px] text-muted leading-snug">{opts.desc}</p>
           {opts.bonus && (
             <div className="flex items-center gap-2 text-[14px] text-body pt-1">
               <Gift className="h-4 w-4 text-muted" />
@@ -856,11 +857,11 @@ function BayOrderingClientScreen() {
         </div>
 
         <div className="mt-auto flex items-end justify-between gap-3">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="text-[32px] leading-none font-semibold tracking-tight text-ink tabular-nums">{opts.price}</span>
-            <span className="text-base text-muted">{t('qar')}</span>
+          <div className="flex items-baseline gap-x-2 gap-y-1 flex-wrap">
+            <span className="text-[34px] leading-none font-semibold tracking-[-0.02em] text-ink tabular-nums">{opts.price}</span>
+            <span className="text-[15px] text-muted">{t('qar')}</span>
             {opts.was && (
-              <span className="text-base text-dim line-through decoration-zinc-500 tabular-nums">
+              <span className="text-[15px] text-dim line-through decoration-zinc-500 tabular-nums">
                 {opts.was} {t('qar')}
               </span>
             )}
@@ -891,15 +892,13 @@ function BayOrderingClientScreen() {
         <div className="max-w-[1100px] mx-auto h-full px-4 md:px-8 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />
-            <span className="text-sm font-semibold text-ink truncate">
-              {t('activeEmployeePill')}
-            </span>
+            <span className="text-sm font-semibold text-ink truncate">{t('activeEmployeePill')}</span>
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
               onClick={() => setShowProfileModal(true)}
-              className="hidden sm:flex items-center gap-2 text-sm text-ink bg-fill hover:bg-fill-strong px-4 py-2 rounded-full whitespace-nowrap"
+              className="hidden sm:flex items-center gap-2 text-sm text-ink bg-fill hover:bg-fill-strong px-4 py-2 rounded-full whitespace-nowrap active:scale-95 transition"
             >
               <User className="h-4 w-4" />
               <span>{t('viewProfileBtn')}</span>
@@ -907,7 +906,7 @@ function BayOrderingClientScreen() {
             {languageToggleBtn}
             <button
               onClick={handleSwitchPortal}
-              className="flex items-center gap-2 text-sm text-ink bg-fill hover:bg-fill-strong px-4 py-2 rounded-full whitespace-nowrap"
+              className="flex items-center gap-2 text-sm text-ink bg-fill hover:bg-fill-strong px-4 py-2 rounded-full whitespace-nowrap active:scale-95 transition"
               title={isRtl ? 'رجوع للبوابة الرئيسية' : 'Back to previous portal'}
             >
               <ArrowBack className="h-4 w-4" />
@@ -918,120 +917,75 @@ function BayOrderingClientScreen() {
       </header>
 
       {/* Hero */}
-      <section className="relative isolate overflow-hidden min-h-[360px] h-[46dvh] flex items-center justify-center">
+      <section className="relative isolate overflow-hidden min-h-[280px] h-[36dvh] md:h-[42dvh] flex items-center justify-center">
         <Image
           src="/images/hero-car.jpg"
           alt="BMW Coupe"
           fill
           priority
+          sizes="100vw"
           className="object-cover object-[72%_center] opacity-80 -z-10"
         />
-        <div className="absolute inset-0 -z-10 bg-black/50" />
-        <div className="absolute inset-x-0 bottom-0 h-32 -z-10 bg-gradient-to-t from-canvas to-transparent" />
+        <div className="absolute inset-0 -z-10 bg-black/55" />
 
         <div data-theme="dark" className="px-6 text-center max-w-[760px] rise-in">
-          <div className="flex items-center justify-center gap-5 mb-6">
+          <div className="flex items-center justify-center gap-4 mb-5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/images/triplea-shield.png" alt="TripleA Shield Logo" className="w-16 h-16 md:w-20 md:h-20 object-contain" />
+            <img src="/images/triplea-shield.png" alt="TripleA Shield Logo" className="w-11 h-11 md:w-14 md:h-14 object-contain" />
             <span className="text-dim text-sm select-none">✕</span>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/images/qatar-moci-logo.png"
               alt="Ministry of Commerce and Industry - State of Qatar"
-              className="w-24 h-24 md:w-32 md:h-32 object-contain"
+              className="w-[72px] h-[72px] md:w-24 md:h-24 object-contain"
             />
           </div>
 
-          <h1 className="text-[26px] md:text-[40px] font-semibold tracking-tight leading-[1.08] text-ink">
+          <h1 className="text-[28px] md:text-[44px] font-semibold tracking-[-0.02em] leading-[1.08] text-ink text-balance">
             {t('employeeTagline')}
           </h1>
-          <p className="text-base md:text-lg text-body mt-3">
-            {t('employeeSubTagline')}
-          </p>
+          <p className="text-[15px] md:text-lg text-body mt-2.5">{t('employeeSubTagline')}</p>
         </div>
       </section>
 
-      <main className="px-4 md:px-8 pb-6">
-        <div className="max-w-[1100px] mx-auto space-y-10">
-          {/* Employee strip */}
-          {(
-            <section aria-label={t('myProfileSectionTitle')} className="space-y-3">
-              <h2 className="text-sm text-dim px-1">{t('myProfileSectionTitle')}</h2>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setShowProfileModal(true)}
-                onKeyDown={activate(() => setShowProfileModal(true))}
-                className={`${tile} hover:bg-tile-hover p-4 md:p-5 flex items-center justify-between gap-4 cursor-pointer transition-colors group`}
-              >
-                <div className="flex items-center gap-4 min-w-0">
-                  <div className="hidden sm:flex w-12 h-12 rounded-full bg-raised items-center justify-center flex-shrink-0">
-                    <User className="h-5 w-5 text-ink" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-[15px] font-semibold text-ink truncate">
-                      {currentEmployee?.fullName || t('ministryEmployeeTitle')}
-                    </div>
-                    <div className="text-sm text-muted tabular-nums whitespace-nowrap" dir="ltr">
-                      {currentEmployee?.phone || employeePhone}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  {hasActiveSubscription ? (
-                    <span className="inline-flex px-3.5 py-1.5 rounded-full bg-[#2997ff]/15 text-sm font-medium text-link-soft whitespace-nowrap">
-                      {employeeCredits} {t('washesLeftLabel')}
-                    </span>
-                  ) : (
-                    <span className="inline-flex px-3.5 py-1.5 rounded-full bg-fill text-sm text-muted whitespace-nowrap">
-                      {t('statusInactive')}
-                    </span>
-                  )}
-                  <ChevronFwd className="h-5 w-5 text-dim group-hover:text-ink transition-colors" />
-                </div>
-              </div>
-            </section>
-          )}
-
-          {employeeOrders.length > 0 && (
+      <main className="px-4 md:px-8 pt-6 md:pt-8 pb-6">
+        <div className="max-w-[1100px] mx-auto space-y-4 md:space-y-5">
+          {/* The order in progress: one tap to follow it */}
+          {activeOrders.length > 0 && (
             <Link
-              href="/orders"
-              className={`${tile} hover:bg-tile-hover p-4 md:p-5 flex items-center justify-between gap-4 transition-colors group`}
+              href={`/orders/${activeOrders[0].reference}`}
+              className={`${tile} hover:bg-tile-hover active:scale-[0.99] p-4 md:p-5 flex items-center gap-4 transition`}
             >
-              <div className="flex items-center gap-3 min-w-0">
-                <Clock className="h-5 w-5 text-muted flex-shrink-0" />
-                <span className="text-[15px] font-semibold text-ink truncate">{t('orderHistoryTitle')}</span>
+              <span className="h-12 w-12 rounded-2xl bg-fill flex items-center justify-center text-[17px] font-semibold text-ink tabular-nums flex-shrink-0">
+                {activeOrders[0].bayCodeSnapshot}
+              </span>
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="text-[15px] font-semibold text-ink">{t('activeOrderTitle')}</div>
+                <StatusBadge status={activeOrders[0].status} isCustomerView />
               </div>
-              <div className="flex items-center gap-3 flex-shrink-0">
-                {activeOrders.length > 0 && (
-                  <span className="inline-flex px-3 py-1 rounded-full bg-[#2997ff]/15 text-sm font-medium text-link-soft whitespace-nowrap">
-                    {activeOrders.length} {t('inProgressLabel')}
-                  </span>
-                )}
-                <ChevronFwd className="h-5 w-5 text-dim group-hover:text-ink transition-colors" />
-              </div>
+              <span className="flex items-center gap-1 text-[15px] text-link flex-shrink-0">
+                {t('trackOrderBtn')}
+                <ChevronFwd className="h-4 w-4" />
+              </span>
             </Link>
           )}
 
           {/* Your pass: how many washes are left, updated live */}
           {hasActiveSubscription && (
-            <section aria-label={t('passCardTitle')} className={`${tile} p-5 md:p-6 space-y-5`}>
-              <div className="flex items-end justify-between gap-4">
-                <div>
-                  <p className="text-sm text-muted">{t('passCardTitle')}</p>
-                  <p className="mt-1 text-[44px] leading-none font-semibold tracking-[-0.02em] text-ink tabular-nums">
-                    {employeeCredits}
-                    <span className="ms-2 text-[17px] font-normal tracking-normal text-muted lowercase">
-                      {t('passOfLabel')} {passTotal} {t('washesLeftLabel')}
-                    </span>
-                  </p>
-                </div>
+            <section aria-label={t('passCardTitle')} className={`${tile} p-5 md:p-7 space-y-6`}>
+              <div className="flex items-start justify-between gap-4">
+                <p className="text-[15px] text-muted">{t('passCardTitle')}</p>
                 {activeOrders.length > 0 && (
                   <span className="inline-flex px-3 py-1 rounded-full bg-[#2997ff]/15 text-sm font-medium text-link-soft whitespace-nowrap">
                     {activeOrders.length} {t('passInProgressLabel')}
                   </span>
                 )}
+              </div>
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <span className="text-[64px] leading-none font-semibold tracking-[-0.03em] text-ink tabular-nums">{employeeCredits}</span>
+                <span className="text-[17px] text-muted lowercase">
+                  {t('passOfLabel')} {passTotal} {t('washesLeftLabel')}
+                </span>
               </div>
               <div className="flex gap-1.5" aria-hidden="true">
                 {Array.from({ length: passTotal }).map((_, i) => (
@@ -1054,7 +1008,7 @@ function BayOrderingClientScreen() {
                       badge: t('mociBenefitBadge'),
                     })
                   }
-                  className={`${primaryBtn} w-full py-3.5 text-[15px] active:scale-95`}
+                  className={`${primaryBtn} w-full py-3.5 text-[17px] font-normal active:scale-95`}
                 >
                   <Sparkles className="h-4 w-4" />
                   <span>{t('orderWithPassBtn')}</span>
@@ -1065,57 +1019,109 @@ function BayOrderingClientScreen() {
 
           {/* Plans */}
           <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {(
-              <>
-                {renderPlanTile({
-                  image: '/images/wash-spray.jpg',
-                  imageAlt: 'Car Wash Spray',
-                  badge: t('mociBenefitBadge'),
-                  title: t('oneTimeWash'),
-                  desc: t('oneTimeDesc'),
-                  price: 20,
-                  was: 30,
-                  discount: '-33%',
-                  plan: {
-                    id: 'one-time',
-                    title: t('oneTimeWash'),
-                    subtitle: t('oneTimeDesc'),
-                    price: 20,
-                    creditsCost: 0,
-                    paymentMode: 'ONE_TIME',
-                    badge: t('mociBenefitBadge'),
-                  },
-                })}
-                {!hasActiveSubscription && renderPlanTile({
-                  image: '/images/subscription-car.jpg',
-                  imageAlt: 'BMW Sedan Rear',
-                  badge: t('bestValueBadge'),
+            {renderPlanTile({
+              image: '/images/wash-spray.jpg',
+              imageAlt: 'Car Wash Spray',
+              badge: t('mociBenefitBadge'),
+              title: t('oneTimeWash'),
+              desc: t('oneTimeDesc'),
+              price: 20,
+              was: 30,
+              discount: '-33%',
+              plan: {
+                id: 'one-time',
+                title: t('oneTimeWash'),
+                subtitle: t('oneTimeDesc'),
+                price: 20,
+                creditsCost: 0,
+                paymentMode: 'ONE_TIME',
+                badge: t('mociBenefitBadge'),
+              },
+            })}
+            {!hasActiveSubscription &&
+              renderPlanTile({
+                image: '/images/subscription-car.jpg',
+                imageAlt: 'BMW Sedan Rear',
+                badge: t('bestValueBadge'),
+                title: t('subscription8'),
+                desc: t('subscriptionDesc'),
+                bonus: t('freeWashes2'),
+                price: 140,
+                was: 240,
+                discount: '-42%',
+                plan: {
+                  id: 'subscription-8',
                   title: t('subscription8'),
-                  desc: t('subscriptionDesc'),
-                  bonus: t('freeWashes2'),
+                  subtitle: t('subscriptionDesc'),
                   price: 140,
-                  was: 240,
-                  discount: '-42%',
-                  plan: {
-                    id: 'subscription-8',
-                    title: t('subscription8'),
-                    subtitle: t('subscriptionDesc'),
-                    price: 140,
-                    creditsCost: 1,
-                    paymentMode: 'CREDIT',
-                    badge: t('bestValueBadge'),
-                  },
-                })}
-              </>
+                  creditsCost: 1,
+                  paymentMode: 'CREDIT',
+                  badge: t('bestValueBadge'),
+                },
+              })}
+          </section>
+
+          {/* Account: profile and history */}
+          <section aria-label={t('myProfileSectionTitle')} className={`${tile} p-2 space-y-1`}>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setShowProfileModal(true)}
+              onKeyDown={activate(() => setShowProfileModal(true))}
+              className="rounded-[20px] hover:bg-fill-soft active:scale-[0.99] p-3.5 md:p-4 flex items-center justify-between gap-4 cursor-pointer transition group"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <span className="w-11 h-11 rounded-full bg-raised flex items-center justify-center text-[17px] font-semibold text-ink flex-shrink-0">
+                  {(currentEmployee?.fullName || '?').trim().charAt(0).toUpperCase()}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[16px] font-semibold text-ink truncate">
+                    {currentEmployee?.fullName || t('ministryEmployeeTitle')}
+                  </div>
+                  <div className="text-sm text-muted tabular-nums whitespace-nowrap" dir="ltr">
+                    {currentEmployee?.phone || employeePhone}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0">
+                {!hasActiveSubscription && (
+                  <span className="hidden sm:inline-flex px-3 py-1 rounded-full bg-fill text-sm text-muted whitespace-nowrap">
+                    {t('statusInactive')}
+                  </span>
+                )}
+                <ChevronFwd className="h-5 w-5 text-dim group-hover:text-ink transition-colors" />
+              </div>
+            </div>
+
+            {employeeOrders.length > 0 && (
+              <Link
+                href="/orders"
+                className="rounded-[20px] hover:bg-fill-soft active:scale-[0.99] p-3.5 md:p-4 flex items-center justify-between gap-4 transition group"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <span className="w-11 h-11 rounded-full bg-raised flex items-center justify-center flex-shrink-0">
+                    <Clock className="h-5 w-5 text-ink" />
+                  </span>
+                  <span className="text-[16px] font-semibold text-ink truncate">{t('orderHistoryTitle')}</span>
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  {activeOrders.length > 0 && (
+                    <span className="inline-flex px-3 py-1 rounded-full bg-[#2997ff]/15 text-sm font-medium text-link-soft whitespace-nowrap">
+                      {activeOrders.length} {t('inProgressLabel')}
+                    </span>
+                  )}
+                  <ChevronFwd className="h-5 w-5 text-dim group-hover:text-ink transition-colors" />
+                </div>
+              </Link>
             )}
           </section>
 
           {/* Trust */}
-          <section className="grid grid-cols-3 gap-3 text-center py-3.5">
+          <section className="grid grid-cols-3 gap-3 text-center pt-6 pb-2">
             {trustPillars.map(({ icon: Icon, label }, i) => (
-              <div key={i} className="flex flex-col items-center gap-3">
-                <Icon className="h-7 w-7 text-body stroke-[1.5]" />
-                <span className="text-[14px] font-medium text-body leading-snug whitespace-pre-line">{label}</span>
+              <div key={i} className="flex flex-col items-center gap-2.5">
+                <Icon className="h-6 w-6 text-muted stroke-[1.5]" />
+                <span className="text-[13px] text-muted leading-snug whitespace-pre-line">{label}</span>
               </div>
             ))}
           </section>
