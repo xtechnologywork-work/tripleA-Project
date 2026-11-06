@@ -492,6 +492,48 @@ export default function AdminDashboardPage() {
   }, [orders, subscriptions, employees]);
 
   // Status Styling Helper (Strict Linear/Stripe design - no neon slop)
+  // The wash pass of a customer: washes left out of the washes it started with
+  const passInfo = (employeeId: string) => {
+    const left = mockStore.getCreditBalance(employeeId);
+    const sub = mockStore.getEmployeeSubscription(employeeId);
+    const granted = sub
+      ? mockStore
+          .getDb()
+          .credits.filter((c) => c.subscriptionId === sub.id && c.type === 'GRANT')
+          .reduce((sum, c) => sum + c.delta, 0)
+      : 0;
+    return { left, total: sub ? Math.max(left, granted) : left, active: !!sub };
+  };
+
+  // What kind of order this is: a single 20 QAR wash, the order that buys a 140 QAR pass, or a wash paid with the pass
+  const orderKind = (o: Order) => {
+    const amount = o.priceSnapshot?.amountMinor || 0;
+    if (o.paymentMode !== 'CREDIT') {
+      return { key: 'single' as const, label: `Single wash · ${formatQAR(amount)}`, tone: 'bg-fill text-body' };
+    }
+    if (amount >= 14000) {
+      return { key: 'purchase' as const, label: `New pass · ${formatQAR(amount)}`, tone: 'bg-[#2997ff]/20 text-link-soft' };
+    }
+    return { key: 'pass' as const, label: 'Pass wash', tone: 'bg-[#2997ff]/15 text-link-soft' };
+  };
+
+  const renderKindBadge = (o: Order) => {
+    const kind = orderKind(o);
+    const pass = kind.key === 'single' ? null : passInfo(o.employeeId);
+    return (
+      <span className="inline-flex items-center gap-1.5 flex-wrap">
+        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap tabular-nums ${kind.tone}`}>
+          {kind.label}
+        </span>
+        {pass && pass.active && (
+          <span className="text-xs text-dim tabular-nums whitespace-nowrap">
+            {pass.left} of {pass.total} left
+          </span>
+        )}
+      </span>
+    );
+  };
+
   const renderStatusPill = (status: OrderStatus) => {
     const config: Record<OrderStatus, { text: string; dot: string; bg: string }> = {
       NEW: { text: 'New', dot: 'bg-zinc-400', bg: 'bg-fill text-body border-transparent' },
@@ -1097,9 +1139,9 @@ export default function AdminDashboardPage() {
                               <span className="text-dim tabular-nums ms-1.5">({client?.phone || 'Qatar'})</span>
                             </div>
                             <div className="text-xs text-dim tabular-nums truncate">
-                              {ord.reference} · {ord.serviceSnapshot.name} ·{' '}
-                              {ord.paymentMode === 'CREDIT' ? 'Pass (0 QAR)' : formatQAR(ord.priceSnapshot?.amountMinor || 0)}
+                              {ord.reference} · {ord.serviceSnapshot.name}
                             </div>
+                            <div className="pt-1">{renderKindBadge(ord)}</div>
                           </div>
 
                           <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
@@ -1134,6 +1176,7 @@ export default function AdminDashboardPage() {
                             {selectedOrder.reference}
                           </h2>
                           {renderStatusPill(selectedOrder.status)}
+                          {renderKindBadge(selectedOrder)}
                         </div>
                         <div className="flex items-center gap-3 text-sm text-muted flex-wrap">
                           <span className="flex items-center gap-1.5 text-body">
@@ -1349,13 +1392,36 @@ export default function AdminDashboardPage() {
                               <dt className={subtle}>Service</dt>
                               <dd className="mt-1 text-[14px] text-ink font-medium">{selectedOrder.serviceSnapshot.name}</dd>
                             </div>
-                            <div className="rounded-2xl bg-inset p-4">
+                            <div className="col-span-2 rounded-2xl bg-inset p-4">
                               <dt className={subtle}>Payment</dt>
-                              <dd className="mt-1 text-[14px] text-ink font-medium tabular-nums">
-                                {selectedOrder.paymentMode === 'CREDIT'
-                                  ? 'Corporate Pass Credit (0 QAR)'
-                                  : formatQAR(selectedOrder.priceSnapshot?.amountMinor || 0)}
-                              </dd>
+                              {(() => {
+                                const kind = orderKind(selectedOrder);
+                                const pass = passInfo(selectedOrder.employeeId);
+                                const amount = formatQAR(selectedOrder.priceSnapshot?.amountMinor || 0);
+                                return (
+                                  <dd className="mt-1 space-y-1 tabular-nums">
+                                    <div className="text-[14px] text-ink font-semibold">
+                                      {kind.key === 'single'
+                                        ? `Single wash · ${amount}`
+                                        : kind.key === 'purchase'
+                                          ? `Wash pass purchased · ${amount}`
+                                          : 'Paid with the wash pass'}
+                                    </div>
+                                    {kind.key === 'single' && (
+                                      <div className="text-sm text-muted">
+                                        {selectedOrder.paymentStatus === 'PAID_OFFLINE' ? 'Paid' : 'To be paid at handover'}
+                                      </div>
+                                    )}
+                                    {kind.key !== 'single' && (
+                                      <div className="text-sm text-muted">
+                                        {pass.active
+                                          ? `${pass.left} of ${pass.total} washes left on this customer's pass`
+                                          : 'No active pass'}
+                                      </div>
+                                    )}
+                                  </dd>
+                                );
+                              })()}
                             </div>
                           </dl>
                         </div>
