@@ -1,0 +1,290 @@
+@import "tailwindcss";
+
+/*
+ * TripleA design tokens.
+ * Two themes share one set of names. Dark is the default; white is opt-in
+ * through data-theme="light" on <html>. A section can force a theme for its
+ * subtree (the photo heroes stay dark) with its own data-theme attribute.
+ * Surfaces are separated by a step in tone, not by lines or shadows.
+ */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas: #000000;
+  --sidebar: #0c0c0d;
+  --inset: #141416;
+  --tile: #1c1c1e;
+  --tile-hover: #242426;
+  --tile-raised: #2c2c2e;
+  --tile-raised-strong: #3a3a3c;
+
+  --ink: #f5f5f7;
+  --ink-body: #d2d2d7;
+  --ink-muted: #a1a1a6;
+  --ink-dim: #86868b;
+  --ink-faint: #636366;
+
+  --link: #2997ff;
+  --link-soft: #64b5ff;
+
+  --fill-soft: rgba(255, 255, 255, 0.04);
+  --fill: rgba(255, 255, 255, 0.09);
+  --fill-strong: rgba(255, 255, 255, 0.15);
+
+  --scrim: rgba(0, 0, 0, 0.8);
+  --logo-chip: rgba(255, 255, 255, 0.06);
+
+  --hairline: rgba(255, 255, 255, 0.08);
+  --scrollbar: rgba(255, 255, 255, 0.14);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --canvas: #f5f5f7;
+  --sidebar: #ffffff;
+  --inset: #f5f5f7;
+  --tile: #ffffff;
+  --tile-hover: #fafafc;
+  --tile-raised: #ededf0;
+  --tile-raised-strong: #e1e1e6;
+
+  --ink: #1d1d1f;
+  --ink-body: #333336;
+  --ink-muted: #6e6e73;
+  --ink-dim: #86868b;
+  --ink-faint: #aeaeb2;
+
+  --link: #0066cc;
+  --link-soft: #0066cc;
+
+  --fill-soft: rgba(0, 0, 0, 0.03);
+  --fill: rgba(0, 0, 0, 0.05);
+  --fill-strong: rgba(0, 0, 0, 0.09);
+
+  --scrim: rgba(0, 0, 0, 0.35);
+  --logo-chip: #1d1d1f;
+
+  --hairline: rgba(0, 0, 0, 0.08);
+  --scrollbar: rgba(0, 0, 0, 0.18);
+}
+
+:root {
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* light: variant for the rare spot that needs its own white-mode style */
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
+/* Tailwind names for the tokens: bg-canvas, bg-tile, text-ink, text-muted ... */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-sidebar: var(--sidebar);
+  --color-inset: var(--inset);
+  --color-tile: var(--tile);
+  --color-tile-hover: var(--tile-hover);
+  --color-raised: var(--tile-raised);
+  --color-raised-strong: var(--tile-raised-strong);
+  --color-ink: var(--ink);
+  --color-body: var(--ink-body);
+  --color-muted: var(--ink-muted);
+  --color-dim: var(--ink-dim);
+  --color-faint: var(--ink-faint);
+  --color-link: var(--link);
+  --color-link-soft: var(--link-soft);
+  --color-fill-soft: var(--fill-soft);
+  --color-fill: var(--fill);
+  --color-fill-strong: var(--fill-strong);
+  --color-scrim: var(--scrim);
+  --color-line: var(--hairline);
+  --color-logo-chip: var(--logo-chip);
+}
+
+/* Switching themes is instant: no element fades between the two palettes */
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
+}
+
+/* Status colours: darker shades on white so they stay readable */
+[data-theme="light"] .text-emerald-200,
+[data-theme="light"] .text-emerald-300,
+[data-theme="light"] .text-emerald-400 { color: #1a7f37; }
+[data-theme="light"] .text-amber-200,
+[data-theme="light"] .text-amber-300,
+[data-theme="light"] .text-amber-400 { color: #9a6700; }
+[data-theme="light"] .text-rose-300,
+[data-theme="light"] .text-rose-400 { color: #c9184a; }
+[data-theme="light"] .text-\[\#30d158\] { color: #1a7f37; }
+
+
+* {
+  border-color: var(--hairline);
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background-color: var(--canvas);
+  color: var(--ink-body);
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.022em;
+  font-feature-settings: "ss03";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--ink);
+  text-wrap: balance;
+}
+
+/* Arabic: Arial-style naskh (matches the reference sample); Latin stays Inter */
+html[lang="ar"],
+html[dir="rtl"],
+[dir="rtl"] {
+  font-family: var(--font-sans), Arial, Tahoma, "Segoe UI", "Geeza Pro", sans-serif;
+  letter-spacing: 0;
+}
+
+[dir="rtl"] h1,
+[dir="rtl"] h2,
+[dir="rtl"] h3 {
+  letter-spacing: 0;
+}
+
+/* Numbers line up wherever they sit in a column */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Controls: one press behaviour everywhere */
+button,
+[role="button"],
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled),
+[role="button"] {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+button,
+[role="button"] {
+  transition:
+    transform 0.18s var(--ease-out),
+    background-color 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    opacity 0.18s var(--ease-out);
+}
+
+button:not(:disabled):active,
+[role="button"]:active {
+  transform: scale(0.97);
+}
+
+/* Keyboard focus: the accent, 2px, offset */
+:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 0;
+  border-color: transparent;
+}
+
+::selection {
+  background: rgba(41, 151, 255, 0.35);
+  color: #fff;
+}
+
+/* Fields */
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--ink-dim);
+}
+
+/* Entrance: rise and fade, once */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise-in {
+  animation: rise-in 0.6s var(--ease-out) both;
+}
+
+.rise-in-1 { animation-delay: 60ms; }
+.rise-in-2 { animation-delay: 140ms; }
+.rise-in-3 { animation-delay: 220ms; }
+.rise-in-4 { animation-delay: 300ms; }
+
+/* Scrollbars: quiet */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  button:not(:disabled):active,
+  [role="button"]:active {
+    transform: none;
+  }
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
