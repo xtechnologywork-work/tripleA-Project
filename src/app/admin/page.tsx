@@ -84,13 +84,10 @@ export default function AdminDashboardPage() {
   const [creditAdjustmentReason, setCreditAdjustmentReason] = useState<string>('Corporate VIP Complimentary Pass');
   const [historyModalClient, setHistoryModalClient] = useState<Employee | null>(null);
   const [bayLookup, setBayLookup] = useState('');
-  const [dispatchView, setDispatchView] = useState<'LIST' | 'BOARD'>('LIST');
   const [clock, setClock] = useState<number | null>(null);
-  const [inspectionFlow, setInspectionFlow] = useState<'BEFORE' | 'AFTER' | null>(null);
+  const [inspectionFlow, setInspectionFlow] = useState<{ phase: 'BEFORE' | 'AFTER'; editing: boolean } | null>(null);
   const [inspectionViewOpen, setInspectionViewOpen] = useState(false);
   const [clientPanelId, setClientPanelId] = useState<string | null>(null);
-  const [dragOrderId, setDragOrderId] = useState<string | null>(null);
-  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
   // In-app dialogs (replace the browser's confirm / prompt boxes)
   type AdminDialog = { kind: 'cancel' | 'qc' | 'issue' | 'cancelSub' | 'skipInspection'; subId?: string } | null;
@@ -571,26 +568,6 @@ export default function AdminDashboardPage() {
     ? selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'QUALITY_CHECK'
     : false;
 
-  // ---- Board: four columns, drag a card forward to move it ----
-  const boardColumns: { key: string; title: string; statuses: OrderStatus[]; target: OrderStatus }[] = [
-    { key: 'NEW', title: 'New', statuses: ['NEW'], target: 'NEW' },
-    { key: 'ASSIGNED', title: 'Assigned', statuses: ['ASSIGNED'], target: 'ASSIGNED' },
-    { key: 'CLEANING', title: 'Cleaning', statuses: ['IN_PROGRESS', 'QUALITY_CHECK'], target: 'IN_PROGRESS' },
-    { key: 'READY', title: 'Ready at bay', statuses: ['COMPLETED', 'RETURNED_TO_PARKING'], target: 'RETURNED_TO_PARKING' },
-  ];
-
-  const moveOrderToColumn = (orderId: string, columnKey: string) => {
-    const order = orders.find((o) => o.id === orderId);
-    const column = boardColumns.find((c) => c.key === columnKey);
-    if (!order || !column) return;
-    if (column.statuses.includes(order.status)) return; // already there
-    if (!isValidStaffTransition(order.status, column.target, order.statusBeforeIssue)) {
-      showToast(`${order.reference} cannot go from ${order.status} to ${column.title}`);
-      return;
-    }
-    handleTransition(column.target, undefined, undefined, order);
-  };
-
   // ---- Client panel ----
   const panelClient = clientPanelId ? employees.find((e) => e.id === clientPanelId) || null : null;
   const panelOrders = panelClient ? orders.filter((o) => o.employeeId === panelClient.id) : [];
@@ -937,85 +914,6 @@ export default function AdminDashboardPage() {
                 ? lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 : 'Syncing'}
             </span>
-            {activeTab === 'DISPATCH' && dispatchView === 'BOARD' && (
-            <div className="h-full overflow-x-auto px-8 pb-6">
-              <div className="grid grid-cols-4 gap-4 min-w-[980px] h-full">
-                {boardColumns.map((col) => {
-                  const cards = orders.filter((o) => col.statuses.includes(o.status));
-                  return (
-                    <div
-                      key={col.key}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        setDragOverColumn(col.key);
-                      }}
-                      onDragLeave={() => setDragOverColumn((c) => (c === col.key ? null : c))}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        if (dragOrderId) moveOrderToColumn(dragOrderId, col.key);
-                        setDragOrderId(null);
-                        setDragOverColumn(null);
-                      }}
-                      className={`flex flex-col min-h-0 rounded-3xl p-3 transition ${dragOverColumn === col.key ? 'bg-raised ring-2 ring-[#2997ff]' : 'bg-inset'}`}
-                    >
-                      <div className="flex items-center justify-between px-2 py-2">
-                        <h3 className="text-sm font-semibold text-ink">{col.title}</h3>
-                        <span className="text-xs text-dim tabular-nums">{cards.length}</span>
-                      </div>
-                      <div className="flex-1 overflow-y-auto space-y-2 p-1 -m-1">
-                        {cards.length === 0 ? (
-                          <p className="text-xs text-dim text-center py-8">Nothing here</p>
-                        ) : (
-                          cards.map((o) => (
-                            <div
-                              key={o.id}
-                              draggable
-                              onDragStart={() => setDragOrderId(o.id)}
-                              onDragEnd={() => {
-                                setDragOrderId(null);
-                                setDragOverColumn(null);
-                              }}
-                              onClick={() => {
-                                setSelectedOrderId(o.id);
-                                setDispatchView('LIST');
-                              }}
-                              className="bg-tile hover:bg-tile-hover rounded-2xl p-4 cursor-grab active:cursor-grabbing space-y-1.5"
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-[15px] font-semibold text-ink tabular-nums">Bay {o.bayCodeSnapshot}</span>
-                                {renderStatusPill(o.status)}
-                              </div>
-                              <div className="text-sm text-body tabular-nums">{o.vehicleSnapshot.plateNumber}</div>
-                              <div className="text-xs text-dim truncate">
-                                {employees.find((e) => e.id === o.employeeId)?.fullName || 'Client'} · {o.reference}
-                              </div>
-                              {o.assignment?.assignedName && (
-                                <div className="text-xs text-link-soft truncate">{o.assignment.assignedName}</div>
-                              )}
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'DISPATCH' && dispatchView === 'LIST' && (
-              <div className="hidden md:flex items-center bg-tile rounded-full p-1 text-sm">
-                {(['LIST', 'BOARD'] as const).map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setDispatchView(v)}
-                    className={`px-3.5 py-1 rounded-full transition ${dispatchView === v ? 'bg-raised-strong text-ink font-medium' : 'text-muted hover:text-ink'}`}
-                  >
-                    {v === 'LIST' ? 'List' : 'Board'}
-                  </button>
-                ))}
-              </div>
-            )}
             <button
               onClick={() => setSearchOpen(true)}
               className="hidden md:flex items-center gap-2 h-9 px-4 rounded-full bg-tile hover:bg-raised text-sm text-muted hover:text-ink transition"
@@ -1193,7 +1091,8 @@ export default function AdminDashboardPage() {
                       before={selectedBefore}
                       after={selectedAfter}
                       enabled={inspectionEnabled}
-                      onStart={(phase) => setInspectionFlow(phase)}
+                      onStart={(phase) => setInspectionFlow({ phase, editing: false })}
+                      onEdit={(phase) => setInspectionFlow({ phase, editing: true })}
                       onSkip={() => setDialog({ kind: 'skipInspection' })}
                       onView={() => setInspectionViewOpen(true)}
                     />
@@ -2118,7 +2017,6 @@ export default function AdminDashboardPage() {
                     onClick={() => {
                       setSelectedOrderId(o.id);
                       setActiveTab('DISPATCH');
-                      setDispatchView('LIST');
                       setClientPanelId(null);
                     }}
                     className="w-full flex items-center justify-between gap-3 rounded-2xl bg-tile hover:bg-tile-hover px-4 py-3 text-start"
@@ -2293,9 +2191,10 @@ export default function AdminDashboardPage() {
 
       {inspectionFlow && selectedOrder && (
         <InspectionFlow
-          key={`${selectedOrder.id}-${inspectionFlow}`}
+          key={`${selectedOrder.id}-${inspectionFlow.phase}-${inspectionFlow.editing}`}
           order={selectedOrder}
-          phase={inspectionFlow}
+          phase={inspectionFlow.phase}
+          editing={inspectionFlow.editing}
           actor={staffActor}
           onClose={() => setInspectionFlow(null)}
           onDone={(message) => showToast(message)}

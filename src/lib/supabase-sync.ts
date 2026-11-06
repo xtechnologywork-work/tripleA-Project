@@ -360,6 +360,8 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       startedAt: String(r.started_at || new Date().toISOString()),
       submittedAt: r.submitted_at ? String(r.submitted_at) : undefined,
       bypassReason: r.bypass_reason ? String(r.bypass_reason) : undefined,
+      editedAt: r.edited_at ? String(r.edited_at) : undefined,
+      editedBy: r.edited_by ? String(r.edited_by) : undefined,
     }));
 
     // Bays are plain numbers 1 to 1288; the app creates them on demand, so they are not sent
@@ -514,10 +516,25 @@ async function uploadPhoto(sb: SupabaseClient, photo: OrderPhoto): Promise<strin
  * - only an admin can move an order through its stages, adjust credits, or cancel a pass
  * Every admin stage change must follow the status rules.
  */
+let inspectionBucketReady = false;
+
+/** Makes sure the private bucket exists. Looks first, because asking to create an existing bucket with a size limit can fail. */
 async function ensureInspectionBucket(sb: SupabaseClient): Promise<boolean> {
+  if (inspectionBucketReady) return true;
   if (!hasServiceKey()) return false;
-  const { error } = await sb.storage.createBucket(INSPECTION_BUCKET, { public: false, fileSizeLimit: 262144000 });
-  return !error || /already exists/i.test(error.message);
+  const found = await sb.storage.getBucket(INSPECTION_BUCKET);
+  if (found.data) {
+    inspectionBucketReady = true;
+    return true;
+  }
+  // No size option here: the project's global file size limit applies
+  const { error } = await sb.storage.createBucket(INSPECTION_BUCKET, { public: false });
+  if (error && !/already exists/i.test(error.message)) {
+    console.warn('Inspection bucket unavailable:', error.message);
+    return false;
+  }
+  inspectionBucketReady = true;
+  return true;
 }
 
 /** The browser uploads straight to private storage with this one-time link, so large videos never pass through the API. */
@@ -525,12 +542,17 @@ export async function createInspectionUpload(
   orderId: string,
   mediaId: string,
   ext: string
-): Promise<{ path: string; token: string; signedUrl: string } | null> {
+): Promise<{ path: string; token: string; signedUrl: string }> {
   const sb = getServerSupabase();
-  if (!sb || !(await ensureInspectionBucket(sb))) return null;
+  if (!sb) throw new Error('Supabase is not configured');
+  if (!hasServiceKey()) throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing in .env.local');
+  if (!(await ensureInspectionBucket(sb))) throw new Error('The inspections storage bucket could not be created');
   const path = `${orderId}/${mediaId}.${ext}`;
   const { data, error } = await sb.storage.from(INSPECTION_BUCKET).createSignedUploadUrl(path);
-  if (error || !data) return null;
+  if (error || !data) {
+    console.warn('Signed upload link failed:', error?.message);
+    throw new Error(`Could not prepare the upload (${error?.message || 'no link'})`);
+  }
   return { path, token: data.token, signedUrl: data.signedUrl };
 }
 
@@ -560,6 +582,9 @@ async function writeInspections(
   const { data: existingRows } = await sb.from('inspections').select('id,order_id,phase,status').in('order_id', ids);
   const existing = (existingRows || []) as Row[];
 
+  // The edit columns exist after the latest migration_v3_inspection.sql
+  const editColumns = !(await sb.from('inspections').select('edited_at').limit(1)).error;
+
   const rows: Row[] = [];
   for (const i of inspections) {
     const label = `inspection ${i.orderId}`;
@@ -573,8 +598,11 @@ async function writeInspections(
       continue;
     }
     if (same && ['SUBMITTED', 'SKIPPED'].includes(String(same.status))) {
-      result.rejected.push(`${label}: it was already sent and is locked`);
-      continue;
+      // Staff may correct a sent inspection (or complete a skipped one), but it can never go back to a draft
+      if (i.status !== 'SUBMITTED') {
+        result.rejected.push(`${label}: a sent inspection cannot go back to a draft`);
+        continue;
+      }
     }
     if (i.status === 'SKIPPED' && (i.phase !== 'BEFORE' || (i.bypassReason || '').trim().length < 3)) {
       result.rejected.push(`${label}: skipping needs a written reason`);
@@ -625,7 +653,7 @@ async function writeInspections(
       continue;
     }
 
-    rows.push({
+    const row: Row = {
       id: i.id,
       order_id: i.orderId,
       phase: i.phase,
@@ -638,7 +666,12 @@ async function writeInspections(
       started_at: i.startedAt,
       submitted_at: i.status === 'DRAFT' ? null : i.submittedAt || new Date().toISOString(),
       bypass_reason: i.status === 'SKIPPED' ? (i.bypassReason || '').trim().slice(0, 300) : null,
-    });
+    };
+    if (editColumns) {
+      row.edited_at = i.editedAt || null;
+      row.edited_by = i.editedBy || null;
+    }
+    rows.push(row);
   }
 
   if (rows.length > 0) {

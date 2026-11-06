@@ -23,14 +23,21 @@ CREATE TABLE IF NOT EXISTS public.inspections (
 CREATE INDEX IF NOT EXISTS idx_inspections_order ON public.inspections (order_id);
 CREATE INDEX IF NOT EXISTS idx_inspections_status ON public.inspections (status);
 
--- 2. A submitted inspection can never be edited or deleted (the proof must stay as it was sent)
+-- 2. Who corrected a sent inspection, and when (the app also writes this to the audit log)
+ALTER TABLE public.inspections ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+ALTER TABLE public.inspections ADD COLUMN IF NOT EXISTS edited_by TEXT;
+
+-- 3. A sent inspection can be corrected, but never deleted and never turned back into a draft
 CREATE OR REPLACE FUNCTION public.protect_submitted_inspection() RETURNS trigger AS $$
 BEGIN
-    IF OLD.status IN ('SUBMITTED', 'SKIPPED') THEN
-        RAISE EXCEPTION 'A submitted inspection cannot be changed';
-    END IF;
     IF TG_OP = 'DELETE' THEN
+        IF OLD.status IN ('SUBMITTED', 'SKIPPED') THEN
+            RAISE EXCEPTION 'A sent inspection cannot be deleted';
+        END IF;
         RETURN OLD;
+    END IF;
+    IF OLD.status IN ('SUBMITTED', 'SKIPPED') AND NEW.status = 'DRAFT' THEN
+        RAISE EXCEPTION 'A sent inspection cannot go back to a draft';
     END IF;
     RETURN NEW;
 END;
@@ -40,17 +47,17 @@ DROP TRIGGER IF EXISTS trg_inspections_protect ON public.inspections;
 CREATE TRIGGER trg_inspections_protect BEFORE UPDATE OR DELETE ON public.inspections
     FOR EACH ROW EXECUTE FUNCTION public.protect_submitted_inspection();
 
--- 3. Rows are opened like the other tables until you run the lockdown file
+-- 4. Rows are opened like the other tables until you run the lockdown file
 ALTER TABLE public.inspections ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "allow_all_inspections" ON public.inspections;
 CREATE POLICY "allow_all_inspections" ON public.inspections FOR ALL TO public USING (true) WITH CHECK (true);
 
--- 4. Private storage for the photos and videos (the app also creates it if it is missing)
+-- 5. Private storage for the photos and videos (the app also creates it if it is missing)
 INSERT INTO storage.buckets (id, name, public, file_size_limit)
 VALUES ('inspections', 'inspections', false, 262144000)
 ON CONFLICT (id) DO NOTHING;
 
--- 5. Live updates: the dashboard sees the photos arrive from the team's phones
+-- 6. Live updates: the dashboard sees the photos arrive from the team's phones
 DO $$
 BEGIN
     BEGIN

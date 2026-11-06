@@ -24,11 +24,13 @@ interface InspectionCardProps {
   /** False until migration_v3_inspection.sql has been run in Supabase. */
   enabled: boolean;
   onStart: (phase: 'BEFORE' | 'AFTER') => void;
+  /** Correct an inspection that was already sent. */
+  onEdit: (phase: 'BEFORE' | 'AFTER') => void;
   onSkip: () => void;
   onView: () => void;
 }
 
-export function InspectionCard({ order, before, after, enabled, onStart, onSkip, onView }: InspectionCardProps) {
+export function InspectionCard({ order, before, after, enabled, onStart, onEdit, onSkip, onView }: InspectionCardProps) {
   const card = 'rounded-3xl bg-tile p-6';
 
   if (!enabled) {
@@ -62,6 +64,12 @@ export function InspectionCard({ order, before, after, enabled, onStart, onSkip,
           <p className="text-sm text-muted mt-1">
             {before.inspectedBy} started the wash without an inspection: {before.bypassReason}
           </p>
+          <button
+            onClick={() => onEdit('BEFORE')}
+            className="mt-3 px-4 py-2 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink"
+          >
+            Complete the inspection now
+          </button>
         </div>
       </div>
     );
@@ -83,10 +91,20 @@ export function InspectionCard({ order, before, after, enabled, onStart, onSkip,
               </p>
             </div>
           </div>
-          <button onClick={onView} className="px-4 py-2 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink whitespace-nowrap">
-            {after?.status === 'SUBMITTED' ? 'Compare' : 'View'}
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button onClick={() => onEdit('BEFORE')} className="px-4 py-2 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink whitespace-nowrap">
+              Edit
+            </button>
+            <button onClick={onView} className="px-4 py-2 rounded-full bg-fill hover:bg-fill-strong text-sm text-ink whitespace-nowrap">
+              {after?.status === 'SUBMITTED' ? 'Compare' : 'View'}
+            </button>
+          </div>
         </div>
+        {before.editedAt && (
+          <p className="text-xs text-dim -mt-2">
+            Edited by {before.editedBy} · {formatDateTime(before.editedAt)}
+          </p>
+        )}
 
         <div className="flex flex-wrap gap-2 text-sm">
           <span className="px-3 py-1 rounded-full bg-fill text-body tabular-nums">
@@ -106,6 +124,12 @@ export function InspectionCard({ order, before, after, enabled, onStart, onSkip,
             </span>
           )}
         </div>
+
+        {after?.status === 'SUBMITTED' && (
+          <button onClick={() => onEdit('AFTER')} className="text-sm text-dim hover:text-ink">
+            Edit the after-wash check
+          </button>
+        )}
 
         {/* After the wash */}
         {!closed && stage && after?.status !== 'SUBMITTED' && (

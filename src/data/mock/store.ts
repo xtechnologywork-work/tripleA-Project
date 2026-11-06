@@ -775,6 +775,51 @@ class MockStore {
     return inspection;
   }
 
+  /**
+   * Corrects a sent inspection (add a missed damage, replace a photo). Nothing changes until this is called,
+   * so an abandoned edit leaves the original untouched and Start Wash stays unlocked.
+   * A skipped inspection can also be completed this way. Every edit is written to the audit log.
+   */
+  public updateSubmittedInspection(next: Inspection, actor: ActorContext): Inspection {
+    const db = this.getDb();
+    const index = db.inspections.findIndex((i) => i.id === next.id);
+    if (index === -1) throw new Error('Inspection not found');
+    const current = db.inspections[index];
+    if (current.status === 'DRAFT') throw new Error('Send the inspection first');
+
+    const candidate: Inspection = { ...next, status: 'SUBMITTED' };
+    const problem = validateInspection(candidate);
+    if (problem) throw new Error(problem);
+
+    const now = new Date().toISOString();
+    const wasSkipped = current.status === 'SKIPPED';
+    db.inspections[index] = {
+      ...candidate,
+      submittedAt: current.submittedAt || now,
+      editedAt: now,
+      editedBy: actor.name || actor.email || actor.id,
+      bypassReason: undefined,
+    };
+
+    db.auditLogs.unshift({
+      id: uid('aud'),
+      actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
+      action: wasSkipped ? `inspection.complete.${current.phase}` : `inspection.edit.${current.phase}`,
+      entityType: 'ORDER',
+      entityId: current.orderId,
+      details: {
+        photosBefore: current.media.length,
+        photosAfter: candidate.media.length,
+        damagesBefore: current.damages.length,
+        damagesAfter: candidate.damages.length,
+        skippedReason: wasSkipped ? current.bypassReason : undefined,
+      },
+      createdAt: now,
+    });
+    this.saveToStorage();
+    return db.inspections[index];
+  }
+
   /** Emergency only: a supervisor starts the wash without an inspection, and says why. */
   public skipInspection(orderId: string, reason: string, actor: ActorContext): Inspection {
     const cleanReason = reason.trim();

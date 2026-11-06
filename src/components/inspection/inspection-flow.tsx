@@ -15,6 +15,8 @@ interface InspectionFlowProps {
   order: Order;
   phase: InspectionPhase;
   actor: ActorContext;
+  /** Correct an inspection that was already sent. The original stays as it was until "Save changes". */
+  editing?: boolean;
   onClose: () => void;
   onDone: (message: string) => void;
 }
@@ -31,7 +33,7 @@ function stampLabel(order: Order): string {
   return `Bay ${order.bayCodeSnapshot} · ${order.reference} · ${pad(now.getDate())}/${pad(now.getMonth() + 1)} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
-export function InspectionFlow({ order, phase, actor, onClose, onDone }: InspectionFlowProps) {
+export function InspectionFlow({ order, phase, actor, editing = false, onClose, onDone }: InspectionFlowProps) {
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const ref = useRef<Inspection | null>(null);
   const [step, setStep] = useState<Step>('photos');
@@ -56,7 +58,15 @@ export function InspectionFlow({ order, phase, actor, onClose, onDone }: Inspect
   // Open (or create) the draft. It is saved after every change, so a closed phone loses nothing.
   useEffect(() => {
     try {
-      const draft = mockStore.startInspection(order.id, phase, actor);
+      let draft: Inspection;
+      if (editing) {
+        const sent = mockStore.getInspection(order.id, phase);
+        if (!sent || sent.status === 'DRAFT') throw new Error('There is no sent inspection to edit');
+        // Work on a copy: nothing is saved until "Save changes"
+        draft = JSON.parse(JSON.stringify(sent)) as Inspection;
+      } else {
+        draft = mockStore.startInspection(order.id, phase, actor);
+      }
       ref.current = draft;
       // eslint-disable-next-line react-hooks/set-state-in-effect -- load the draft once
       setInspection(draft);
@@ -72,7 +82,8 @@ export function InspectionFlow({ order, phase, actor, onClose, onDone }: Inspect
   const commit = (change: (current: Inspection) => Inspection) => {
     if (!ref.current) return;
     try {
-      const saved = mockStore.saveInspection(change(ref.current));
+      // An edit stays on this screen until it is saved; a new inspection is saved after every change
+      const saved = editing ? change(ref.current) : mockStore.saveInspection(change(ref.current));
       ref.current = saved;
       setInspection(saved);
     } catch (e) {
@@ -203,8 +214,13 @@ export function InspectionFlow({ order, phase, actor, onClose, onDone }: Inspect
       return;
     }
     try {
-      mockStore.submitInspection(order.id, phase, actor);
-      onDone(phase === 'BEFORE' ? 'Inspection sent. Start Wash is now unlocked.' : 'After-wash photos sent.');
+      if (editing) {
+        mockStore.updateSubmittedInspection(inspection, actor);
+        onDone('Inspection updated.');
+      } else {
+        mockStore.submitInspection(order.id, phase, actor);
+        onDone(phase === 'BEFORE' ? 'Inspection sent. Start Wash is now unlocked.' : 'After-wash photos sent.');
+      }
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not send the inspection');
@@ -225,7 +241,7 @@ export function InspectionFlow({ order, phase, actor, onClose, onDone }: Inspect
         <div className="max-w-[720px] mx-auto px-4 h-14 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[15px] font-semibold truncate">
-              {phase === 'BEFORE' ? 'Pre-wash inspection' : 'After-wash check'}
+              {editing ? 'Edit inspection' : phase === 'BEFORE' ? 'Pre-wash inspection' : 'After-wash check'}
             </p>
             <p className="text-xs text-dim truncate tabular-nums">
               Bay {order.bayCodeSnapshot} · {order.reference}
@@ -234,10 +250,10 @@ export function InspectionFlow({ order, phase, actor, onClose, onDone }: Inspect
           <button
             onClick={onClose}
             className="flex items-center gap-1.5 h-9 px-4 rounded-full bg-fill hover:bg-fill-strong text-sm"
-            aria-label="Close. The draft is saved."
+            aria-label={editing ? 'Close without saving' : 'Close. The draft is saved.'}
           >
             <X className="h-4 w-4" />
-            <span>Save and close</span>
+            <span>{editing ? 'Cancel' : 'Save and close'}</span>
           </button>
         </div>
 
@@ -491,7 +507,11 @@ export function InspectionFlow({ order, phase, actor, onClose, onDone }: Inspect
               </div>
             ) : (
               <p className="text-sm text-muted px-1">
-                After you send it, the inspection is locked. {phase === 'BEFORE' ? 'Start Wash opens right away.' : ''}
+                {editing
+                  ? 'Your changes replace the saved inspection. The edit is recorded with your name and the time.'
+                  : phase === 'BEFORE'
+                  ? 'Start Wash opens right away after you send it. You can still edit the inspection later.'
+                  : 'You can still edit this later.'}
               </p>
             )}
           </>
@@ -532,7 +552,7 @@ export function InspectionFlow({ order, phase, actor, onClose, onDone }: Inspect
               className="flex-1 h-12 rounded-full bg-[#30d158] hover:bg-[#34e060] text-black text-[15px] font-semibold flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Check className="h-4 w-4 stroke-[3]" />
-              <span>Submit inspection</span>
+              <span>{editing ? 'Save changes' : 'Submit inspection'}</span>
             </button>
           )}
         </div>

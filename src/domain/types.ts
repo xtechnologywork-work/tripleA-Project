@@ -330,4 +330,7 @@ export interface Inspection {
   startedAt: string;
   submittedAt?: string;
   bypassReason?: string;
+  /** Set when a sent inspection was corrected afterwards. */
+  editedAt?: string;
+  editedBy?: string;
 }

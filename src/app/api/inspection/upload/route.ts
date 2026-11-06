@@ -30,12 +30,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Bad request' }, { status: 400 });
   }
 
-  const upload = await createInspectionUpload(orderId, mediaId, ext);
-  if (!upload) {
-    return NextResponse.json(
-      { error: 'Storage is not ready. Check SUPABASE_SERVICE_ROLE_KEY and run migration_v3_inspection.sql' },
-      { status: 502 }
-    );
+  try {
+    return NextResponse.json(await createInspectionUpload(orderId, mediaId, ext));
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Storage is not ready' }, { status: 502 });
   }
-  return NextResponse.json(upload);
 }
