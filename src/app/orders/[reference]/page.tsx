@@ -43,7 +43,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
 
   const [order, setOrder] = useState<Order | null>(null);
   const [photos, setPhotos] = useState<OrderPhoto[]>([]);
-  const [events, setEvents] = useState<OrderEvent[]>([]);
+  const [, setEvents] = useState<OrderEvent[]>([]);
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
 
   useEffect(() => {

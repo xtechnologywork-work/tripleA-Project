@@ -1,13 +1,12 @@
 'use client';
 
 import React, { Suspense, useState, useEffect } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { compressImage } from '@/lib/image';
-import { StatusBadge } from '@/components/ui/status-badge';
 import type { ActorContext } from '@/domain/status-machine';
 import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
@@ -44,13 +43,10 @@ import {
 type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
 
 function BayOrderingClientScreen() {
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const { actor, setActor } = useAuth();
-  const { language, toggleLanguage, isRtl, t } = useLanguage();
+  const { setActor } = useAuth();
+  const { toggleLanguage, isRtl, t } = useLanguage();
 
-  const spotCode = searchParams.get('spot') || '1';
-  const tokenString = searchParams.get('token') || 'tk_a01_137';
 
   // Portal selection state
   const [portalMode, setPortalMode] = useState<PortalMode>('UNSELECTED');
@@ -69,7 +65,7 @@ function BayOrderingClientScreen() {
 
   // Vehicle form state (declared before the sync effect that populates it)
   const [plateNumber, setPlateNumber] = useState('');
-  const [plateType, setPlateType] = useState('Private');
+  const [plateType] = useState('Private');
   const [make, setMake] = useState('');
   const [model, setModel] = useState('');
   const [color, setColor] = useState('');

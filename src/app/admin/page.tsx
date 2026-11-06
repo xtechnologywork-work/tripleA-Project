@@ -19,7 +19,7 @@ import {
   EmployeeSubscription,
 } from '@/domain/types';
 import { formatDateTime, formatQAR } from '@/lib/utils';
-import { getAllowedTransitions, ActorContext, isValidStaffTransition } from '@/domain/status-machine';
+import { ActorContext, isValidStaffTransition } from '@/domain/status-machine';
 import {
   Search,
   CheckCircle2,
@@ -59,22 +59,22 @@ export default function AdminDashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [subscriptions, setSubscriptions] = useState<EmployeeSubscription[]>([]);
-  const [fieldMembers, setFieldMembers] = useState<FieldTeamMember[]>([]);
+  const [, setFieldMembers] = useState<FieldTeamMember[]>([]);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
   // Filter States for Dispatch
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [zoneFilter, setZoneFilter] = useState<string>('ALL');
+  const [zoneFilter] = useState<string>('ALL');
 
   // Selected Order for Execution Console
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
 
   // Action Inputs for Order Execution
-  const [assigneeId, setAssigneeId] = useState('');
-  const [issueDesc, setIssueDesc] = useState('');
-  const [qcNotes, setQcNotes] = useState('');
+  const [, setAssigneeId] = useState('');
+  const [issueDesc] = useState('');
+  const [qcNotes] = useState('');
   const [returnOverrideBay, setReturnOverrideBay] = useState('');
 
   // Modals state
@@ -346,7 +346,7 @@ export default function AdminDashboardPage() {
 
       return matchesSearch;
     });
-  }, [employees, clientSearchQuery, clientSubFilter, subscriptions]);
+  }, [employees, clientSearchQuery, clientSubFilter]);
 
   // Order Transition Handler
   const handleTransition = (toStatus: OrderStatus, customAssigneeId?: string, note?: string, orderOverride?: Order) => {
@@ -417,8 +417,6 @@ export default function AdminDashboardPage() {
       showToast(`Could not update: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
-
-  const allowedTransitions = selectedOrder ? getAllowedTransitions(selectedOrder, actor) : [];
 
   // Manual Credit Adjustment Action
   const handleSaveCreditAdjustment = () => {
