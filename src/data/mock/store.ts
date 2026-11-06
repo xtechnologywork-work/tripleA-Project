@@ -494,6 +494,37 @@ class MockStore {
     return [...this.getDb().subscriptions];
   }
 
+  /** Staff edit of a pass: its status and its end date. Every change is written to the audit log. */
+  public updateSubscription(
+    subscriptionId: string,
+    updates: { status?: EmployeeSubscription['status']; expiresAt?: string | null },
+    actor: ActorContext
+  ): EmployeeSubscription {
+    if (!hasPermission(actor, 'credits.adjust')) throw new Error('Unauthorized to edit passes');
+    const db = this.getDb();
+    const sub = db.subscriptions.find((s) => s.id === subscriptionId);
+    if (!sub) throw new Error('Pass not found');
+    if (updates.status === 'ACTIVE' && sub.status !== 'ACTIVE') {
+      if (db.subscriptions.some((s) => s.employeeId === sub.employeeId && s.id !== sub.id && s.status === 'ACTIVE')) {
+        throw new Error('This employee already has another active pass');
+      }
+    }
+    const before = { status: sub.status, expiresAt: sub.expiresAt };
+    if (updates.status) sub.status = updates.status;
+    if (updates.expiresAt !== undefined) sub.expiresAt = updates.expiresAt || undefined;
+    db.auditLogs.unshift({
+      id: uid('aud'),
+      actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
+      action: 'subscription.edit',
+      entityType: 'SUBSCRIPTION',
+      entityId: sub.id,
+      details: { before, after: { status: sub.status, expiresAt: sub.expiresAt } },
+      createdAt: new Date().toISOString(),
+    });
+    this.saveToStorage();
+    return sub;
+  }
+
   public cancelSubscription(subscriptionId: string): void {
     const db = this.getDb();
     const sub = db.subscriptions.find((s) => s.id === subscriptionId);

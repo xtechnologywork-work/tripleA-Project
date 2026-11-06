@@ -91,6 +91,18 @@ export default function AdminDashboardPage() {
   const [creditAdjustmentAmount, setCreditAdjustmentAmount] = useState<number>(1);
   const [creditAdjustmentReason, setCreditAdjustmentReason] = useState<string>('Corporate VIP Complimentary Pass');
   const [historyModalClient, setHistoryModalClient] = useState<Employee | null>(null);
+  // Editing a subscriber: their details, their pass and the washes they have left
+  const [editSub, setEditSub] = useState<EmployeeSubscription | null>(null);
+  const [esForm, setEsForm] = useState({
+    name: '',
+    phone: '',
+    employeeNo: '',
+    left: 0,
+    expiry: '',
+    status: 'ACTIVE' as EmployeeSubscription['status'],
+    reason: '',
+  });
+  const [esError, setEsError] = useState('');
   const [bayLookup, setBayLookup] = useState('');
   const [clock, setClock] = useState<number | null>(null);
   const [inspectionFlow, setInspectionFlow] = useState<{ phase: 'BEFORE' | 'AFTER'; editing: boolean } | null>(null);
@@ -426,6 +438,59 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const openEditSub = (sub: EmployeeSubscription) => {
+    const client = employees.find((e) => e.id === sub.employeeId);
+    setEsForm({
+      name: client?.fullName || '',
+      phone: client?.phone || '',
+      employeeNo: client?.employeeNo || '',
+      left: mockStore.getCreditBalance(sub.employeeId),
+      expiry: sub.expiresAt ? sub.expiresAt.slice(0, 10) : '',
+      status: sub.status,
+      reason: '',
+    });
+    setEsError('');
+    setEditSub(sub);
+  };
+
+  const handleSaveEditSub = () => {
+    if (!editSub) return;
+    const name = esForm.name.trim();
+    const digits = esForm.phone.replace(/\D/g, '');
+    const number = esForm.employeeNo.trim();
+    const left = Number(esForm.left);
+    if (name.length < 2 || name.length > 80) return setEsError('Name must be 2 to 80 characters');
+    if (digits.length < 8 || digits.length > 15) return setEsError('Phone number is not valid');
+    if (!/^[\w-]{1,20}$/.test(number)) return setEsError('Employee number is not valid');
+    if (!Number.isInteger(left) || left < 0 || left > 99) return setEsError('Washes left must be a whole number from 0 to 99');
+    if (esForm.expiry && Number.isNaN(new Date(esForm.expiry).getTime())) return setEsError('End date is not valid');
+    const current = mockStore.getCreditBalance(editSub.employeeId);
+    if (left !== current && esForm.reason.trim().length < 3) return setEsError('Write a short reason for changing the washes left');
+
+    try {
+      const emp = employees.find((e) => e.id === editSub.employeeId);
+      if (emp && (emp.fullName !== name || emp.phone !== esForm.phone.trim() || (emp.employeeNo || '') !== number)) {
+        mockStore.updateEmployee(emp.id, { fullName: name, phone: esForm.phone.trim(), employeeNo: number });
+      }
+      mockStore.updateSubscription(
+        editSub.id,
+        {
+          status: esForm.status,
+          expiresAt: esForm.expiry ? new Date(`${esForm.expiry}T23:59:59`).toISOString() : null,
+        },
+        staffActor
+      );
+      if (left !== current) {
+        mockStore.adjustCredit(editSub.employeeId, left - current, esForm.reason.trim(), staffActor);
+      }
+      showToast(`Saved changes for ${name}`);
+      setEditSub(null);
+      reloadData();
+    } catch (err: unknown) {
+      setEsError(err instanceof Error ? err.message : 'Could not save');
+    }
+  };
+
   // Manual Credit Adjustment Action
   const handleSaveCreditAdjustment = () => {
     if (!creditModalClient) return;
@@ -434,7 +499,7 @@ export default function AdminDashboardPage() {
         creditModalClient.id,
         creditAdjustmentAmount,
         creditAdjustmentReason || 'Admin Management Adjustment',
-        actor
+        staffActor
       );
       showToast(
         `Granted ${creditAdjustmentAmount > 0 ? '+' : ''}${creditAdjustmentAmount} wash credits to ${creditModalClient.fullName}`
@@ -1813,8 +1878,17 @@ export default function AdminDashboardPage() {
                               </td>
                               <td className="py-3.5 px-5 tabular-nums text-muted">
                                 {sub.activatedAt ? formatDateTime(sub.activatedAt) : 'N/A'}
+                                {sub.expiresAt && (
+                                  <span className="block text-xs text-dim">Ends {formatDateTime(sub.expiresAt).split(',')[0]}</span>
+                                )}
                               </td>
-                              <td className="py-3.5 px-5 text-right">
+                              <td className="py-3.5 px-5 text-right whitespace-nowrap">
+                                <button
+                                  onClick={() => openEditSub(sub)}
+                                  className="me-2 px-3.5 py-1.5 rounded-full bg-fill hover:bg-fill-strong text-ink text-sm transition cursor-pointer"
+                                >
+                                  Edit
+                                </button>
                                 {sub.status === 'ACTIVE' && (
                                   <button
                                     onClick={() => setDialog({ kind: 'cancelSub', subId: sub.id })}
@@ -2371,6 +2445,157 @@ export default function AdminDashboardPage() {
       {/* ---------------------------------------------------------------------- */}
       {/* GRANT CREDIT MODAL                                                     */}
       {/* ---------------------------------------------------------------------- */}
+      {editSub && (
+        <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-md flex items-center justify-center p-4">
+          <div className="w-full max-w-[460px] max-h-[92dvh] overflow-y-auto bg-tile rounded-3xl p-5 md:p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <span className="text-sm text-dim">Edit subscriber</span>
+                <h4 className="text-lg font-semibold text-ink tracking-tight mt-0.5">{esForm.name || 'Subscriber'}</h4>
+                <span className="text-xs tabular-nums text-dim">{editSub.id}</span>
+              </div>
+              <button
+                onClick={() => setEditSub(null)}
+                className="w-9 h-9 rounded-full bg-fill text-ink hover:bg-fill-strong transition cursor-pointer flex items-center justify-center"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-sm">
+              <div>
+                <label className="text-body block mb-1.5" htmlFor="es-name">Full name</label>
+                <input
+                  id="es-name"
+                  type="text"
+                  value={esForm.name}
+                  onChange={(e) => setEsForm({ ...esForm, name: e.target.value })}
+                  className="w-full bg-raised rounded-2xl px-4 py-3 text-sm text-ink outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-body block mb-1.5" htmlFor="es-phone">Qatar mobile</label>
+                  <input
+                    id="es-phone"
+                    type="tel"
+                    value={esForm.phone}
+                    onChange={(e) => setEsForm({ ...esForm, phone: e.target.value })}
+                    className="w-full bg-raised rounded-2xl px-4 py-3 text-sm text-ink outline-none tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="text-body block mb-1.5" htmlFor="es-no">Employee number</label>
+                  <input
+                    id="es-no"
+                    type="text"
+                    value={esForm.employeeNo}
+                    onChange={(e) => setEsForm({ ...esForm, employeeNo: e.target.value })}
+                    className="w-full bg-raised rounded-2xl px-4 py-3 text-sm text-ink outline-none tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-body block mb-1.5" htmlFor="es-left">Washes left</label>
+                  <div className="flex items-center bg-raised rounded-2xl">
+                    <button
+                      type="button"
+                      onClick={() => setEsForm({ ...esForm, left: Math.max(0, Number(esForm.left) - 1) })}
+                      className="w-11 h-11 text-lg text-ink cursor-pointer"
+                      aria-label="One less"
+                    >
+                      −
+                    </button>
+                    <input
+                      id="es-left"
+                      type="number"
+                      min={0}
+                      max={99}
+                      value={esForm.left}
+                      onChange={(e) => setEsForm({ ...esForm, left: Number(e.target.value) })}
+                      className="flex-1 min-w-0 bg-transparent text-center text-sm text-ink outline-none tabular-nums"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEsForm({ ...esForm, left: Math.min(99, Number(esForm.left) + 1) })}
+                      className="w-11 h-11 text-lg text-ink cursor-pointer"
+                      aria-label="One more"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-body block mb-1.5" htmlFor="es-end">Pass ends</label>
+                  <input
+                    id="es-end"
+                    type="date"
+                    value={esForm.expiry}
+                    onChange={(e) => setEsForm({ ...esForm, expiry: e.target.value })}
+                    className="w-full bg-raised rounded-2xl px-4 py-3 text-sm text-ink outline-none tabular-nums"
+                  />
+                </div>
+              </div>
+
+              {Number(esForm.left) !== mockStore.getCreditBalance(editSub.employeeId) && (
+                <div>
+                  <label className="text-body block mb-1.5" htmlFor="es-reason">Reason for changing the washes left</label>
+                  <input
+                    id="es-reason"
+                    type="text"
+                    value={esForm.reason}
+                    onChange={(e) => setEsForm({ ...esForm, reason: e.target.value })}
+                    className="w-full bg-raised rounded-2xl px-4 py-3 text-sm text-ink outline-none"
+                  />
+                </div>
+              )}
+
+              <div>
+                <span className="text-body block mb-1.5">Status</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['ACTIVE', 'CANCELLED'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setEsForm({ ...esForm, status: st })}
+                      className={`py-2.5 rounded-full font-medium transition cursor-pointer ${
+                        esForm.status === st ? 'bg-ink text-canvas' : 'bg-fill text-ink hover:bg-fill-strong'
+                      }`}
+                    >
+                      {st === 'ACTIVE' ? 'Active' : 'Cancelled'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {esError && (
+                <p role="alert" className="text-sm text-rose-300">
+                  {esError}
+                </p>
+              )}
+
+              <div className="pt-1 flex items-center gap-2">
+                <button
+                  onClick={handleSaveEditSub}
+                  className="flex-1 py-3 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white font-semibold transition cursor-pointer active:scale-95"
+                >
+                  Save changes
+                </button>
+                <button
+                  onClick={() => setEditSub(null)}
+                  className="px-5 py-3 rounded-full bg-fill hover:bg-fill-strong text-body transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {creditModalClient && (
         <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-md flex items-center justify-center p-4">
           <div className="w-full max-w-[420px] bg-tile rounded-3xl p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
