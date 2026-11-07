@@ -43,7 +43,7 @@ import {
 
 import { EmployeeNotifications } from '@/components/notifications/employee-notifications';
 import { AddToHomeScreen } from '@/components/notifications/add-to-home-screen';
-import { SUPPORT_PHONE } from '@/lib/support';
+import { SUPPORT_WHATSAPP, SUPPORT_CALL } from '@/lib/support';
 import { StatusBadge } from '@/components/ui/status-badge';
 
 type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
@@ -1404,10 +1404,10 @@ function BayOrderingClientScreen() {
                 </Link>
 
                 {/* Support and sign out */}
-                {SUPPORT_PHONE && (
+                {(
                   <div className="grid grid-cols-2 gap-3">
                     <a
-                      href={`https://wa.me/${SUPPORT_PHONE}?text=Hello%20TripleA`}
+                      href={`https://wa.me/${SUPPORT_WHATSAPP}?text=Hello%20TripleA`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className={`${softBtn} py-3`}
@@ -1415,7 +1415,7 @@ function BayOrderingClientScreen() {
                       <MessageSquare className="h-4 w-4" />
                       <span>{t('contactWhatsApp')}</span>
                     </a>
-                    <a href={`tel:+${SUPPORT_PHONE}`} className={`${softBtn} py-3`}>
+                    <a href={`tel:+${SUPPORT_CALL}`} className={`${softBtn} py-3`}>
                       <Phone className="h-4 w-4" />
                       <span>{t('callConcierge')}</span>
                     </a>

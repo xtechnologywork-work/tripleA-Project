@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { mockStore } from '@/data/mock/store';
 import { Order, OrderEvent, OrderPhoto } from '@/domain/types';
 import { formatDateTime, formatQAR, plateLabel, serviceName } from '@/lib/utils';
-import { SUPPORT_PHONE } from '@/lib/support';
+import { SUPPORT_WHATSAPP } from '@/lib/support';
 import {
   ArrowLeft,
   ArrowRight,
@@ -345,9 +345,9 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                 </div>
               </div>
 
-              {SUPPORT_PHONE && (
+              {SUPPORT_WHATSAPP && (
                 <a
-                  href={`https://wa.me/${SUPPORT_PHONE}?text=Hello%20TripleA`}
+                  href={`https://wa.me/${SUPPORT_WHATSAPP}?text=Hello%20TripleA`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-11 h-11 rounded-full bg-fill hover:bg-fill-strong text-ink flex items-center justify-center flex-shrink-0 transition"
@@ -505,9 +505,9 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               <ArrowFwd className="h-4 w-4" />
             </Link>
 
-            {SUPPORT_PHONE && (
+            {SUPPORT_WHATSAPP && (
               <a
-                href={`https://wa.me/${SUPPORT_PHONE}?text=Hello%20TripleA`}
+                href={`https://wa.me/${SUPPORT_WHATSAPP}?text=Hello%20TripleA`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-full py-3 rounded-full bg-fill hover:bg-fill-strong text-body hover:text-ink text-[14px] transition flex items-center justify-center gap-2"
