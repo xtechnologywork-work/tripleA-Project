@@ -4,6 +4,7 @@ import { isServerSupabaseConfigured } from '@/lib/supabase-server';
 import { signEmployeeToken } from '@/lib/employee-session';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
 import { getLocalDb, mergeLocal } from '@/lib/local-db';
+import { deviceOf, recordQrEvent } from '@/lib/qr-events';
 import type { Employee } from '@/domain/types';
 
 /**
@@ -21,7 +22,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'TOO_MANY' }, { status: 429 });
   }
 
-  let body: { action?: string; phone?: string; fullName?: string; employeeNo?: string };
+  let body: { action?: string; phone?: string; fullName?: string; employeeNo?: string; source?: string };
   try {
     body = await req.json();
   } catch {
@@ -52,6 +53,7 @@ export async function POST(req: Request) {
   if (body.action === 'login') {
     if (!existing) return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });
     if (existing.status === 'SUSPENDED') return NextResponse.json({ error: 'SUSPENDED' }, { status: 403 });
+    if (body.source === 'qr') await recordQrEvent('login', deviceOf(req.headers.get('user-agent') || ''));
     return NextResponse.json({ employee: existing, token: signEmployeeToken(existing.id) });
   }
 
@@ -83,6 +85,7 @@ export async function POST(req: Request) {
     } else {
       mergeLocal({ employees: [employee] });
     }
+    if (body.source === 'qr') await recordQrEvent('signup', deviceOf(req.headers.get('user-agent') || ''));
     return NextResponse.json({ employee, token: signEmployeeToken(employee.id), isNew: true });
   }
 

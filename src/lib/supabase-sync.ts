@@ -174,7 +174,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       sb.from('order_photos').select('*'),
       sb.from('order_events').select('*').order('created_at', { ascending: true }),
       sb.from('issues').select('*').order('created_at', { ascending: false }),
-      sb.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(300),
+      sb.from('audit_logs').select('*').not('action', 'like', 'qr.%').order('created_at', { ascending: false }).limit(300),
       sb.from('inspections').select('*').order('started_at', { ascending: true }),
     ]);
     const inspectionEnabled = !inspectionRes.error;

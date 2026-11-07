@@ -7,6 +7,7 @@ import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { getSupabase } from '@/lib/supabase';
 import { InsightsView } from '@/components/admin/insights';
+import { QrPage } from '@/components/admin/qr-page';
 import { SafeImage } from '@/components/ui/safe-media';
 import type { DataSet } from '@/domain/analytics';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
@@ -30,6 +31,7 @@ import {
   RotateCw,
   Layers,
   ChevronLeft,
+  QrCode,
   Users,
   CreditCard,
   TrendingUp,
@@ -50,7 +52,7 @@ import {
   Loader2,
 } from 'lucide-react';
 
-type AdminTab = 'DISPATCH' | 'CLIENTS' | 'SUBSCRIPTIONS' | 'BAYS' | 'INSIGHTS';
+type AdminTab = 'DISPATCH' | 'CLIENTS' | 'SUBSCRIPTIONS' | 'BAYS' | 'QR' | 'INSIGHTS';
 
 export default function AdminDashboardPage() {
   const { actor } = useAuth();
@@ -669,6 +671,7 @@ export default function AdminDashboardPage() {
     { key: 'CLIENTS', label: 'Clients & Registry', short: 'Clients', icon: <Users className="h-[18px] w-[18px]" />, count: metrics.totalClients },
     { key: 'SUBSCRIPTIONS', label: '140 QAR Passes', short: 'Passes', icon: <CreditCard className="h-[18px] w-[18px]" />, count: metrics.activeSubscribers },
     { key: 'BAYS', label: 'Tower Bays', short: 'Bays', icon: <MapPin className="h-[18px] w-[18px]" />, count: null },
+    { key: 'QR', label: 'QR Code', short: 'QR', icon: <QrCode className="h-[18px] w-[18px]" />, count: null },
     { key: 'INSIGHTS', label: 'Analytics', short: 'Insights', icon: <TrendingUp className="h-[18px] w-[18px]" />, count: null },
   ];
   const activeNav = navItems.find((n) => n.key === activeTab) || navItems[0];
@@ -1053,7 +1056,7 @@ export default function AdminDashboardPage() {
         {/* Key numbers */}
         <div
           className={`flex-shrink-0 px-4 md:px-8 pb-4 md:pb-5 gap-3 ${
-            activeTab === 'INSIGHTS'
+            activeTab === 'INSIGHTS' || activeTab === 'QR'
               ? 'hidden'
               : mobileDetail && activeTab === 'DISPATCH'
               ? 'hidden min-[1360px]:grid min-[1360px]:grid-cols-6'
@@ -1977,6 +1980,12 @@ export default function AdminDashboardPage() {
           {/* ================================================================== */}
           {/* INSIGHTS                                                           */}
           {/* ================================================================== */}
+          {activeTab === 'QR' && (
+            <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
+              <QrPage now={clock} />
+            </div>
+          )}
+
           {activeTab === 'INSIGHTS' && (
             <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
               <InsightsView data={insightsData} now={clock} />

@@ -250,6 +250,23 @@ function BayOrderingClientScreen() {
     setPhoneError('');
   };
 
+  // Scanning the QR code lands here with ?src=qr: remember it, tidy the address, and open the sign in sheet
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('src') !== 'qr') return;
+      localStorage.setItem('triplea_src', 'qr');
+      window.history.replaceState(null, '', window.location.pathname);
+      if (!mockStore.getEmployeeToken()) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- open the sign in sheet for someone who scanned the code
+        setAuthMode('LOGIN');
+        setShowPhoneModal(true);
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
+
   const handleAuthSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (authBusy) return;
@@ -285,6 +302,14 @@ function BayOrderingClientScreen() {
           phone: qatarNumber,
           fullName: employeeName.trim(),
           employeeNo: employeeNumber.trim(),
+          // Came from the QR code: the dashboard counts it
+          source: (() => {
+            try {
+              return localStorage.getItem('triplea_src') === 'qr' ? 'qr' : undefined;
+            } catch {
+              return undefined;
+            }
+          })(),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -304,6 +329,11 @@ function BayOrderingClientScreen() {
       }
 
       const employee = data.employee as Employee;
+      try {
+        localStorage.removeItem('triplea_src'); // counted once
+      } catch {
+        // Ignore
+      }
       mockStore.adoptEmployee(employee, data.token);
       setCurrentEmployee(employee);
       setActor({ type: 'EMPLOYEE', id: employee.id, name: employee.fullName, email: employee.email });
