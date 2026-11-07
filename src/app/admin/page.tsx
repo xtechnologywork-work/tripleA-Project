@@ -1430,7 +1430,11 @@ export default function AdminDashboardPage() {
                                     </div>
                                     {kind.key === 'single' && (
                                       <div className="text-sm text-muted">
-                                        {selectedOrder.paymentStatus === 'PAID_OFFLINE' ? 'Paid' : 'To be paid at handover'}
+                                        {selectedOrder.paymentStatus === 'PAID_ONLINE'
+                                          ? 'Paid online (MyFatoorah). If you cancel it, refund it in MyFatoorah.'
+                                          : selectedOrder.paymentStatus === 'PAID_OFFLINE'
+                                            ? 'Paid'
+                                            : 'To be paid at handover'}
                                       </div>
                                     )}
                                     {kind.key !== 'single' && (

@@ -168,7 +168,7 @@ export interface Order {
   paymentMode: 'ONE_TIME' | 'CREDIT';
   priceSnapshot?: Money;
   creditsUsed: number;
-  paymentStatus: 'NOT_APPLICABLE' | 'UNPAID' | 'PAID_OFFLINE';
+  paymentStatus: 'NOT_APPLICABLE' | 'UNPAID' | 'PAID_OFFLINE' | 'PAID_ONLINE';
   instructions?: string;
   status: OrderStatus;
   statusBeforeIssue?: OrderStatus;

@@ -29,6 +29,10 @@ Without any environment variables the app runs in local demo mode (data kept in 
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` | Twilio Verify, for the sign in code by SMS. The auth token is secret |
 | `OTP_ENABLED` | `true` to require the SMS code at sign in and sign up. Leave unset until Twilio is ready |
 | `OTP_DEV_CODE` | Local testing only: a 6-digit code accepted without sending a message. Ignored on the live site |
+| `PAYMENTS_ENABLED` | `true` to make customers pay online (MyFatoorah) before a single wash or a new pass |
+| `MYFATOORAH_API_KEY` | MyFatoorah API token. Secret |
+| `MYFATOORAH_BASE_URL` | `https://apitest.myfatoorah.com` for testing, `https://api-qa.myfatoorah.com` for Qatar live |
+| `MYFATOORAH_WEBHOOK_SECRET` | The webhook secret from the MyFatoorah portal. Secret. Webhook address: `https://<your domain>/api/pay/webhook` |
 
 Never commit real keys.
 
@@ -41,7 +45,8 @@ Run these in the Supabase SQL editor, in this order, when setting up a new proje
 3. `supabase/migration_numeric_bays.sql`
 4. `supabase/migration_v3_inspection.sql`
 5. `supabase/migration_v4_otp.sql` (limits for the sign in code)
-6. `supabase/migration_v2_lockdown.sql` once everything works. It closes the tables to the public key, so only the server reads and writes them.
+6. `supabase/migration_v5_payments.sql` (online payments)
+7. `supabase/migration_v2_lockdown.sql` once everything works. It closes the tables to the public key, so only the server reads and writes them.
 
 Create the admin user in Supabase Auth and give them the admin role (the end of `migration_v2_lockdown.sql` explains how).
 
@@ -58,4 +63,5 @@ npm run build
 
 - Days in Insights and the QR statistics follow Doha time (UTC+3).
 - Photos and videos are private files in Supabase Storage, shown through signed links.
+- Online payment: the order is made only after our server confirms the payment with MyFatoorah (on the return page `/pay/return` and by the webhook). Every id comes from the payment, so it never makes two orders. A paid single wash is cancelled by the team, who refunds it in MyFatoorah.
 - The employee QR code points to `/qr`, a fixed address that counts the scan and sends the person to the app, so a printed code never needs to change.

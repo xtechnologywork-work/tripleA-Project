@@ -490,6 +490,9 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                       ? `من الباقة · ${order.creditsUsed} غسلة`
                       : `Wash pass · ${order.creditsUsed} wash`
                     : formatQAR(order.priceSnapshot?.amountMinor || 0, lang)}
+                  {order.paymentStatus === 'PAID_ONLINE' && (
+                    <span className="ms-2 text-xs font-medium text-emerald-400">{isRtl ? 'مدفوع' : 'Paid'}</span>
+                  )}
                 </dd>
               </div>
             </dl>
@@ -517,7 +520,13 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               </a>
             )}
 
-            {order.status === 'NEW' && (
+            {order.status === 'NEW' && order.paymentStatus === 'PAID_ONLINE' && order.paymentMode === 'ONE_TIME' && (
+              <p className="text-center text-sm text-dim px-2">
+                {isRtl ? 'لإلغاء طلب مدفوع واسترجاع المبلغ، تواصل مع فريق TripleA.' : 'To cancel a paid order and get your money back, contact the TripleA team.'}
+              </p>
+            )}
+
+            {order.status === 'NEW' && !(order.paymentStatus === 'PAID_ONLINE' && order.paymentMode === 'ONE_TIME') && (
               <button
                 onClick={() => {
                   setCancelError('');

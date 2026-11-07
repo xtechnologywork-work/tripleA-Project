@@ -76,6 +76,7 @@ class MockStore {
   private lastServerJson = '';
   private employeeToken: string | null = null;
   private inspectionEnabled = true; // false until migration_v3_inspection.sql has been run in Supabase
+  private paymentsEnabled = false; // true when the server has online payment switched on
   private authToken: string | null = null;
   private issueListeners: Array<(messages: string[]) => void> = [];
 
@@ -133,6 +134,11 @@ class MockStore {
   }
 
   /** False when the Supabase inspections table does not exist yet: the dashboard then shows a setup message. */
+  /** Online payment (MyFatoorah) is required before a paid wash or a new pass. */
+  public isPaymentsEnabled(): boolean {
+    return this.paymentsEnabled;
+  }
+
   public isInspectionEnabled(): boolean {
     return this.inspectionEnabled;
   }
@@ -328,7 +334,10 @@ class MockStore {
       const res = await fetch(fresh ? '/api/sync?fresh=1' : '/api/sync', { cache: 'no-store', headers: this.authHeaders() });
       if (res.ok) {
         const data = await res.json();
-        if (data.features) this.inspectionEnabled = data.features.inspection !== false;
+        if (data.features) {
+          this.inspectionEnabled = data.features.inspection !== false;
+          this.paymentsEnabled = data.features.payments === true;
+        }
         if (data.db && (data.source === 'supabase' || !this.db || data.version !== this.lastServerVersion)) {
           // Re-check: a change may have been made while the request was in flight
           if (this.db && this.hasUnsyncedChanges()) return;

@@ -508,7 +508,7 @@ function datePrefix(iso: string): string {
   return `CB-${iso.substring(2, 4)}${iso.substring(5, 7)}${iso.substring(8, 10)}`;
 }
 
-async function nextReference(sb: SupabaseClient, createdAt: string): Promise<string> {
+export async function nextReference(sb: SupabaseClient, createdAt: string): Promise<string> {
   const prefix = datePrefix(createdAt);
   const { data } = await sb
     .from('orders')
@@ -528,6 +528,14 @@ async function ensurePhotoBucket(sb: SupabaseClient): Promise<boolean> {
     return false;
   }
   return true;
+}
+
+/** Keeps the photo of an order that is waiting for its payment. Returns "storage:<path>", or null. */
+export async function storePaymentPhoto(intentId: string, dataUrl: string): Promise<string | null> {
+  const sb = getServerSupabase();
+  if (!sb) return null;
+  const stored = await uploadPhoto(sb, { id: `pay-${intentId}`, orderId: 'pending', kind: 'BEFORE', blobKey: dataUrl, uploadedBy: 'customer', createdAt: new Date().toISOString() });
+  return stored ? stored.split('|')[0] : null;
 }
 
 async function uploadPhoto(sb: SupabaseClient, photo: OrderPhoto): Promise<string | null> {
@@ -1048,7 +1056,7 @@ async function validateEmployeeBatch(
   orderIds.delete('');
 
   const [orderRes, ledgerRes, subsRes, svcRes, pkgRes, meRes] = await Promise.all([
-    orderIds.size ? sb.from('orders').select('id,employee_id,status,credits_used,payment_mode,price_snapshot,bay_code_snapshot,service_id').in('id', Array.from(orderIds)) : Promise.resolve({ data: [] as Row[] }),
+    orderIds.size ? sb.from('orders').select('id,employee_id,status,credits_used,payment_mode,payment_status,price_snapshot,bay_code_snapshot,service_id').in('id', Array.from(orderIds)) : Promise.resolve({ data: [] as Row[] }),
     sb.from('credit_ledger').select('id,order_id,amount,type,details').eq('employee_id', me),
     sb.from('employee_subscriptions').select('id,status').eq('employee_id', me),
     sb.from('services').select('price_minor'),
@@ -1179,6 +1187,11 @@ async function validateEmployeeBatch(
     if (o.status === from) continue; // nothing to save
     if (!(from === 'NEW' && o.status === 'CANCELLED')) {
       errors.push(`order ${o.reference}: you can only cancel an order that is still new`);
+      continue;
+    }
+    // A wash paid online needs a refund, so only the team can cancel it
+    if (String(current.payment_status) === 'PAID_ONLINE' && String(current.payment_mode) === 'ONE_TIME') {
+      errors.push(`order ${o.reference}: a paid order is cancelled by the team`);
       continue;
     }
     // The row is written back whole, so nothing except the status may differ from what is stored

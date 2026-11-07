@@ -526,6 +526,50 @@ function BayOrderingClientScreen() {
     }
   };
 
+  // A paid wash or a new pass goes through MyFatoorah first; washes from an existing pass do not
+  const needsPayment =
+    !!selectedPlan &&
+    mockStore.isPaymentsEnabled() &&
+    (selectedPlan.id === 'subscription-8' || (selectedPlan.id === 'one-time' && selectedPlan.paymentMode === 'ONE_TIME'));
+
+  const startPayment = async (bay: string) => {
+    if (!selectedPlan || !currentEmployee) return;
+    const res = await fetch('/api/pay/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-employee-token': mockStore.getEmployeeToken() || '' },
+      body: JSON.stringify({
+        plan: selectedPlan.id === 'subscription-8' ? 'pass' : 'single',
+        bay,
+        notes: notes.trim() || undefined,
+        plate: plateNumber.trim() || registeredVehicle?.plateNumber || undefined,
+        make: make || undefined,
+        model: model || undefined,
+        color: color || undefined,
+        photo: photoPreview || undefined,
+        lang: isRtl ? 'ar' : 'en',
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.url) {
+      const errors: Record<string, string> = {
+        BAD_BAY: t('parkingBayRangeError'),
+        HAS_PASS: t('payHasPass'),
+        TOO_MANY: t('tooManyAttemptsError'),
+        GATEWAY: t('payGatewayError'),
+      };
+      setConfirmError(errors[data.error] || t('payGatewayError'));
+      setIsSubmitting(false);
+      return;
+    }
+    try {
+      // So the return page can find this payment even if MyFatoorah sends no id back
+      sessionStorage.setItem('triplea_payment_ref', String(data.paymentRef || ''));
+    } catch {
+      // Ignore
+    }
+    window.location.assign(data.url);
+  };
+
   const handleConfirmOrder = () => {
     if (!selectedPlan) return;
 
@@ -547,6 +591,14 @@ function BayOrderingClientScreen() {
 
     setConfirmError('');
     setIsSubmitting(true);
+
+    if (needsPayment) {
+      startPayment(String(bayNumber)).catch(() => {
+        setConfirmError(t('payGatewayError'));
+        setIsSubmitting(false);
+      });
+      return;
+    }
 
     try {
       // Every order belongs to the signed-in employee
@@ -1718,13 +1770,18 @@ function BayOrderingClientScreen() {
             >
               <span>
                 {isSubmitting
-                  ? t('processing')
+                  ? needsPayment
+                    ? t('payRedirecting')
+                    : t('processing')
+                  : needsPayment
+                  ? `${t('payNowBtn')} · ${selectedPlan.price} ${t('qar')}`
                   : parkingBayInput.trim()
                   ? `${t('confirmOrderBtn')} ${parkingBayInput.trim()} · ${selectedPlan.price} ${t('qar')}`
                   : `${t('confirmOrderBtn')} · ${selectedPlan.price} ${t('qar')}`}
               </span>
               <ArrowFwd className="h-4 w-4" />
             </button>
+            {needsPayment && <p className="text-center text-[13px] text-dim">{t('payMethodsNote')}</p>}
           </div>
         </div>
       )}
