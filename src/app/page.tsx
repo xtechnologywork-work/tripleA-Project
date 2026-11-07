@@ -44,6 +44,8 @@ import {
 import { EmployeeNotifications } from '@/components/notifications/employee-notifications';
 import { AddToHomeScreen } from '@/components/notifications/add-to-home-screen';
 import { SUPPORT_WHATSAPP, SUPPORT_CALL } from '@/lib/support';
+import { OtpCode } from '@/components/auth/otp-code';
+import { qatarMobile } from '@/domain/otp';
 import { StatusBadge } from '@/components/ui/status-badge';
 
 type PortalMode = 'UNSELECTED' | 'EMPLOYEE';
@@ -267,17 +269,138 @@ function BayOrderingClientScreen() {
     }
   }, []);
 
+  // Step 2 of sign in: the code sent by SMS
+  const [otp, setOtp] = useState<{ phone: string; action: 'login' | 'signup'; pending?: string; resendAt: number } | null>(null);
+  const [otpError, setOtpError] = useState('');
+  const [otpErrorKey, setOtpErrorKey] = useState(0);
+
+  const authErrorText = (code: string | undefined): string => {
+    const errors: Record<string, string> = {
+      NOT_FOUND: t('accountNotFoundError'),
+      EXISTS: t('accountExistsError'),
+      TOO_MANY: t('tooManyAttemptsError'),
+      SUSPENDED: t('accountSuspendedError'),
+      BAD_NAME: t('nameRequiredError'),
+      BAD_EMPLOYEE_NO: t('employeeNoRequiredError'),
+      BAD_PHONE: t('phoneError'),
+      WRONG_CODE: t('otpWrong'),
+      EXPIRED: t('otpExpired'),
+      BLOCKED: t('otpBlocked'),
+      NOT_READY: t('otpNotReady'),
+    };
+    return (code && errors[code]) || t('genericAuthError');
+  };
+
+  const qrSource = (): string | undefined => {
+    try {
+      return localStorage.getItem('triplea_src') === 'qr' ? 'qr' : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** Asks the server to send a code. Returns the server's answer. */
+  const requestCode = async (action: 'login' | 'signup', phone: string) => {
+    const res = await fetch('/api/auth/otp/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action,
+        phone,
+        fullName: employeeName.trim(),
+        employeeNo: employeeNumber.trim(),
+        lang: isRtl ? 'ar' : 'en',
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+  };
+
+  /** Step 2: checks the code (or none, when codes are switched off) and signs the person in. */
+  const finishAuth = async (state: { phone: string; action: 'login' | 'signup'; pending?: string }, code?: string): Promise<string | null> => {
+    const res = await fetch('/api/auth/otp/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: state.action, phone: state.phone, code, pending: state.pending, source: qrSource() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.employee || !data.token) return data.error || 'FAILED';
+
+    const employee = data.employee as Employee;
+    try {
+      localStorage.removeItem('triplea_src'); // counted once
+    } catch {
+      // Ignore
+    }
+    mockStore.adoptEmployee(employee, data.token);
+    setCurrentEmployee(employee);
+    setActor({ type: 'EMPLOYEE', id: employee.id, name: employee.fullName, email: employee.email });
+    try {
+      localStorage.setItem('cb_active_employee_phone', state.phone);
+      sessionStorage.setItem('triplea_portal_mode', 'EMPLOYEE');
+    } catch {
+      // Ignore
+    }
+    setOtp(null);
+    setOtpError('');
+    setShowPhoneModal(false);
+    setPortalMode('EMPLOYEE');
+    if (state.action === 'signup') setShowContactNoticeModal(true);
+    setRefreshTrigger((prev) => prev + 1);
+    return null;
+  };
+
+  const submitCode = async (code: string) => {
+    if (!otp || authBusy) return;
+    setAuthBusy(true);
+    setOtpError('');
+    try {
+      const error = await finishAuth(otp, code);
+      if (error) {
+        if (error === 'EXPIRED' && otp.action === 'signup') {
+          // The sign-up details timed out: back to the form
+          setOtp(null);
+          setPhoneError(t('otpStartAgain'));
+          return;
+        }
+        setOtpError(authErrorText(error));
+        setOtpErrorKey((k) => k + 1);
+      }
+    } catch {
+      setOtpError(t('genericAuthError'));
+      setOtpErrorKey((k) => k + 1);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const resendCode = async (): Promise<boolean> => {
+    if (!otp) return false;
+    try {
+      const { ok, data } = await requestCode(otp.action, otp.phone);
+      if (!ok) {
+        setOtpError(authErrorText(data.error));
+        setOtpErrorKey((k) => k + 1);
+        return false;
+      }
+      setOtpError('');
+      setOtp({ ...otp, pending: data.pending || otp.pending, resendAt: Date.now() + (Number(data.resendIn) || 60) * 1000 });
+      return true;
+    } catch {
+      setOtpError(t('genericAuthError'));
+      return false;
+    }
+  };
+
   const handleAuthSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (authBusy) return;
-    const cleanDigits = employeePhone.replace(/\D/g, '');
-
-    // Standard Qatari mobile is 8 digits
-    if (cleanDigits.length < 8) {
+    // A Qatar mobile: 8 digits starting with 3, 5, 6 or 7
+    const qatarNumber = qatarMobile(employeePhone);
+    if (!qatarNumber) {
       setPhoneError(t('phoneError'));
       return;
     }
-    const qatarNumber = cleanDigits.slice(-8);
 
     if (authMode === 'SIGNUP') {
       if (!employeeName.trim()) {
@@ -293,62 +416,21 @@ function BayOrderingClientScreen() {
     setAuthBusy(true);
     setPhoneError('');
     try {
-      // The server checks the number, creates the account when needed, and returns a signed session
-      const res = await fetch('/api/auth/employee', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: authMode === 'LOGIN' ? 'login' : 'signup',
-          phone: qatarNumber,
-          fullName: employeeName.trim(),
-          employeeNo: employeeNumber.trim(),
-          // Came from the QR code: the dashboard counts it
-          source: (() => {
-            try {
-              return localStorage.getItem('triplea_src') === 'qr' ? 'qr' : undefined;
-            } catch {
-              return undefined;
-            }
-          })(),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        const errors: Record<string, string> = {
-          NOT_FOUND: t('accountNotFoundError'),
-          EXISTS: t('accountExistsError'),
-          TOO_MANY: t('tooManyAttemptsError'),
-          SUSPENDED: t('accountSuspendedError'),
-          BAD_NAME: t('nameRequiredError'),
-          BAD_EMPLOYEE_NO: t('employeeNoRequiredError'),
-          BAD_PHONE: t('phoneError'),
-        };
-        setPhoneError(errors[data.error] || t('genericAuthError'));
+      const action = authMode === 'LOGIN' ? 'login' : 'signup';
+      const { ok, data } = await requestCode(action, qatarNumber);
+      if (!ok) {
+        setPhoneError(authErrorText(data.error));
         return;
       }
-
-      const employee = data.employee as Employee;
-      try {
-        localStorage.removeItem('triplea_src'); // counted once
-      } catch {
-        // Ignore
+      const state = { phone: qatarNumber, action: action as 'login' | 'signup', pending: data.pending as string | undefined };
+      if (data.skip) {
+        // Codes are switched off: sign in straight away
+        const error = await finishAuth(state);
+        if (error) setPhoneError(authErrorText(error));
+        return;
       }
-      mockStore.adoptEmployee(employee, data.token);
-      setCurrentEmployee(employee);
-      setActor({ type: 'EMPLOYEE', id: employee.id, name: employee.fullName, email: employee.email });
-
-      try {
-        localStorage.setItem('cb_active_employee_phone', qatarNumber);
-        sessionStorage.setItem('triplea_portal_mode', 'EMPLOYEE');
-      } catch {
-        // Ignore
-      }
-
-      setShowPhoneModal(false);
-      setPortalMode('EMPLOYEE');
-      if (authMode === 'SIGNUP') setShowContactNoticeModal(true); // Popup for free corporate verification notice on registration
-      setRefreshTrigger((prev) => prev + 1);
+      setOtpError('');
+      setOtp({ ...state, resendAt: Date.now() + (Number(data.resendIn) || 60) * 1000 });
     } catch {
       setPhoneError(t('genericAuthError'));
     } finally {
@@ -693,6 +775,8 @@ function BayOrderingClientScreen() {
                   onClick={() => {
                     setShowPhoneModal(false);
                     setPhoneError('');
+                    setOtp(null);
+                    setOtpError('');
                   }}
                   className="w-9 h-9 rounded-full bg-fill hover:bg-fill-strong text-body flex items-center justify-center"
                   aria-label={t('closeBtn')}
@@ -701,6 +785,22 @@ function BayOrderingClientScreen() {
                 </button>
               </div>
 
+              {otp ? (
+                <OtpCode
+                  phone={otp.phone}
+                  resendAt={otp.resendAt}
+                  busy={authBusy}
+                  error={otpError}
+                  errorKey={otpErrorKey}
+                  onSubmit={submitCode}
+                  onResend={resendCode}
+                  onChangeNumber={() => {
+                    setOtp(null);
+                    setOtpError('');
+                  }}
+                />
+              ) : (
+                <>
               {/* Segmented control */}
               <div className="grid grid-cols-2 p-1 bg-raised rounded-full text-sm font-medium">
                 <button
@@ -818,7 +918,7 @@ function BayOrderingClientScreen() {
                     {t('cancelBtn')}
                   </button>
                   <button type="submit" disabled={authBusy} className={`${primaryBtn} flex-1 py-3 disabled:opacity-60`}>
-                    <span>{authMode === 'LOGIN' ? t('signInBtn') : t('signUpBtn')}</span>
+                    <span>{t('otpContinue')}</span>
                     <ArrowFwd className="h-4 w-4" />
                   </button>
                 </div>
@@ -836,6 +936,8 @@ function BayOrderingClientScreen() {
                   </button>
                 </div>
               </form>
+                </>
+              )}
             </div>
           </div>
         )}

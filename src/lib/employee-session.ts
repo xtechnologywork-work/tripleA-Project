@@ -41,3 +41,39 @@ export function verifyEmployeeToken(token: string | null | undefined): string | 
     return null;
   }
 }
+
+/**
+ * A short-lived signed note that carries the sign-up details from "send the code" to "check the code",
+ * so they cannot be changed in between. Valid for 15 minutes.
+ */
+export interface PendingSignup {
+  phone: string;
+  fullName: string;
+  employeeNo: string;
+}
+
+export function signPendingSignup(data: PendingSignup, ttlMs = 15 * 60 * 1000): string {
+  if (!secret) throw new Error('SESSION_SECRET is not set');
+  const payload = `${b64(JSON.stringify({ ...data, kind: 'signup' }))}.${Date.now() + ttlMs}`;
+  return `${payload}.${sign(payload)}`;
+}
+
+export function verifyPendingSignup(token: string | null | undefined): PendingSignup | null {
+  if (!token || !secret) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [dataPart, expiresPart, signature] = parts;
+  const expected = sign(`${dataPart}.${expiresPart}`);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const expires = Number(expiresPart);
+  if (!Number.isFinite(expires) || expires < Date.now()) return null;
+  try {
+    const data = JSON.parse(unb64(dataPart));
+    if (data.kind !== 'signup' || typeof data.phone !== 'string' || typeof data.fullName !== 'string' || typeof data.employeeNo !== 'string') return null;
+    return { phone: data.phone, fullName: data.fullName, employeeNo: data.employeeNo };
+  } catch {
+    return null;
+  }
+}

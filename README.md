@@ -26,6 +26,9 @@ Without any environment variables the app runs in local demo mode (data kept in 
 | `ADMIN_EMAILS` | Comma separated emails allowed into the dashboard |
 | `NEXT_PUBLIC_SITE_URL` | The final public address, for example `https://example.com`. The QR code is built from it |
 | `NEXT_PUBLIC_SUPPORT_WHATSAPP`, `NEXT_PUBLIC_SUPPORT_CALL` | Optional. Support numbers, digits only with the country code |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` | Twilio Verify, for the sign in code by SMS. The auth token is secret |
+| `OTP_ENABLED` | `true` to require the SMS code at sign in and sign up. Leave unset until Twilio is ready |
+| `OTP_DEV_CODE` | Local testing only: a 6-digit code accepted without sending a message. Ignored on the live site |
 
 Never commit real keys.
 
@@ -37,7 +40,8 @@ Run these in the Supabase SQL editor, in this order, when setting up a new proje
 2. `supabase/migration_v2_dashboard.sql`
 3. `supabase/migration_numeric_bays.sql`
 4. `supabase/migration_v3_inspection.sql`
-5. `supabase/migration_v2_lockdown.sql` once everything works. It closes the tables to the public key, so only the server reads and writes them.
+5. `supabase/migration_v4_otp.sql` (limits for the sign in code)
+6. `supabase/migration_v2_lockdown.sql` once everything works. It closes the tables to the public key, so only the server reads and writes them.
 
 Create the admin user in Supabase Auth and give them the admin role (the end of `migration_v2_lockdown.sql` explains how).
 
