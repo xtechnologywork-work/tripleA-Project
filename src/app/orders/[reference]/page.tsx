@@ -513,7 +513,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                 className="w-full py-3 rounded-full bg-fill hover:bg-fill-strong text-body hover:text-ink text-[14px] transition flex items-center justify-center gap-2"
               >
                 <MessageSquare className="h-4 w-4" />
-                <span>{isRtl ? 'محادثة فورية مع الكونسيرج (واتساب)' : 'Chat on WhatsApp'}</span>
+                <span>{isRtl ? 'محادثة مع الفريق على واتساب' : 'Chat on WhatsApp'}</span>
               </a>
             )}
 
