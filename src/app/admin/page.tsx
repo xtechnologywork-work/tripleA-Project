@@ -11,7 +11,7 @@ import { SafeImage } from '@/components/ui/safe-media';
 import type { DataSet } from '@/domain/analytics';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
-import { isCleared, requiresPreWashInspection } from '@/domain/inspection';
+import { isCleared } from '@/domain/inspection';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { useAuth } from '@/context/auth-context';
 import {
@@ -42,7 +42,6 @@ import {
   X,
   FileText,
   Award,
-  User,
   Eye,
   MessageSquare,
   Maximize2,
@@ -693,13 +692,6 @@ export default function AdminDashboardPage() {
     { value: 'CANCELLED', label: 'Cancelled' },
   ];
 
-  const stageIsReady = selectedOrder
-    ? selectedOrder.status === 'RETURNED_TO_PARKING' || selectedOrder.status === 'COMPLETED'
-    : false;
-  const stageIsCleaning = selectedOrder
-    ? selectedOrder.status === 'IN_PROGRESS' || selectedOrder.status === 'QUALITY_CHECK'
-    : false;
-
   // ---- Client panel ----
   const panelClient = clientPanelId ? employees.find((e) => e.id === clientPanelId) || null : null;
   const panelOrders = panelClient ? orders.filter((o) => o.employeeId === panelClient.id) : [];
@@ -853,11 +845,6 @@ export default function AdminDashboardPage() {
   const inspectionEnabled = mockStore.isInspectionEnabled();
   const selectedBefore = selectedOrder ? mockStore.getInspection(selectedOrder.id, 'BEFORE') : undefined;
   const selectedAfter = selectedOrder ? mockStore.getInspection(selectedOrder.id, 'AFTER') : undefined;
-  const washLocked =
-    !!selectedOrder &&
-    inspectionEnabled &&
-    requiresPreWashInspection(selectedOrder.status, 'IN_PROGRESS') &&
-    !isCleared(selectedBefore);
 
   // Staff can only take a valid next step; everything else is disabled
   const canGo = (to: OrderStatus) =>
@@ -870,13 +857,6 @@ export default function AdminDashboardPage() {
   const open3 = inspectionDone && canGo('IN_PROGRESS') && st !== 'NEW';
   const open4 = canGo('RETURNED_TO_PARKING') && st !== 'NEW' && st !== 'ASSIGNED';
   const lockHint = !inspectionDone ? 'Send the inspection first' : 'Finish the previous stage first';
-  const stageShell = (active: boolean, locked = false) =>
-    `rounded-2xl p-4 flex flex-col justify-between gap-4 transition ${
-      active ? 'bg-raised ring-2 ring-[#2997ff]' : 'bg-inset'
-    } ${locked ? 'opacity-50' : ''}`;
-  const stagePrimary =
-    'w-full py-2.5 rounded-full text-sm font-semibold transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed';
-
   if (authState !== 'ok') {
     return (
       <div className="min-h-screen bg-canvas flex items-center justify-center px-5 font-sans text-center">
@@ -1249,128 +1229,127 @@ export default function AdminDashboardPage() {
                       onView={() => setInspectionViewOpen(true)}
                     />
 
-                    {/* Progression */}
-                    <div className={`${card} p-4 md:p-6 space-y-5`}>
-                      <div className="flex flex-col 2xl:flex-row 2xl:items-center justify-between gap-2">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <h3 className="text-base font-semibold text-ink tracking-tight">Order Progression Deck</h3>
-                          <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300 bg-emerald-400/10 px-2.5 py-1 rounded-full whitespace-nowrap">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                            Live Client Sync Active
-                          </span>
-                        </div>
-                        <span className="text-sm text-dim">
-                          Select any stage below to instantly update customer&apos;s live tracking view:
-                        </span>
-                      </div>
+                    {/* Progress: where the order is, and the one thing to do next */}
+                    {(() => {
+                      const order = selectedOrder;
+                      const st = order.status;
+                      const stepOf = (x: OrderStatus | undefined): number =>
+                        x === 'NEW' ? 0 : x === 'ASSIGNED' ? 1 : x === 'IN_PROGRESS' || x === 'QUALITY_CHECK' ? 2 : x === 'COMPLETED' || x === 'RETURNED_TO_PARKING' ? 3 : -1;
+                      const idx = st === 'ISSUE_REPORTED' ? stepOf(order.statusBeforeIssue) : stepOf(st);
+                      const finished = st === 'RETURNED_TO_PARKING';
+                      const steps: { label: string; short: string }[] = [
+                        { label: 'Received', short: 'Received' },
+                        { label: 'Assigned', short: 'Assigned' },
+                        { label: 'Cleaning', short: 'Cleaning' },
+                        { label: 'Ready at bay', short: 'Ready' },
+                      ];
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-3">
-                        {/* Stage 1 */}
-                        <div className={stageShell(selectedOrder.status === 'NEW')}>
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-semibold text-dim">Stage 1</span>
-                              {selectedOrder.status === 'NEW' ? (
-                                <span className="text-xs text-ink bg-fill px-2 py-0.5 rounded-full font-semibold">Current</span>
-                              ) : (
-                                <Check className="h-4 w-4 text-dim" />
+                      // The next move, and whether it is open yet
+                      let next: { to: OrderStatus; label: string; hint: string; open: boolean } | null = null;
+                      if (st === 'NEW') {
+                        next = { to: 'ASSIGNED', label: 'Assign team', hint: 'The TripleA team takes this car.', open: open2 };
+                      } else if (st === 'ASSIGNED') {
+                        next = { to: 'IN_PROGRESS', label: 'Start wash', hint: 'The customer sees that the wash has started.', open: open3 };
+                      } else if (st === 'IN_PROGRESS' || st === 'QUALITY_CHECK' || st === 'COMPLETED') {
+                        next = {
+                          to: 'RETURNED_TO_PARKING',
+                          label: 'Mark ready at bay',
+                          hint: `The car is back at bay ${order.bayCodeSnapshot}. The customer is told it is ready.`,
+                          open: open4,
+                        };
+                      } else if (st === 'ISSUE_REPORTED' && order.statusBeforeIssue) {
+                        next = {
+                          to: order.statusBeforeIssue,
+                          label: 'Resume order',
+                          hint: 'Carry on from where the order stopped.',
+                          open: canGo(order.statusBeforeIssue),
+                        };
+                      }
+
+                      // One step back, for a mistake
+                      const back: { to: OrderStatus; label: string } | null =
+                        st === 'ASSIGNED' && canGo('NEW')
+                          ? { to: 'NEW', label: 'Move back to Received' }
+                          : st === 'IN_PROGRESS' && canGo('ASSIGNED')
+                            ? { to: 'ASSIGNED', label: 'Move back to Assigned' }
+                            : null;
+
+                      return (
+                        <div className={`${card} p-4 md:p-6 space-y-5`}>
+                          <div className="flex items-center justify-between gap-3">
+                            <h3 className="text-base font-semibold text-ink tracking-tight">Progress</h3>
+                            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300 bg-emerald-400/10 px-2.5 py-1 rounded-full whitespace-nowrap">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                              Customer sees changes live
+                            </span>
+                          </div>
+
+                          {st === 'CANCELLED' ? (
+                            <p className="rounded-2xl bg-inset p-4 text-sm text-muted">This order was cancelled. Nothing more to do.</p>
+                          ) : (
+                            <>
+                              <ol className="grid grid-cols-4 gap-2 md:gap-3" aria-label="Order progress">
+                                {steps.map(({ label, short }, i) => {
+                                  const done = idx > i || (finished && i === 3);
+                                  const current = idx === i && !finished;
+                                  return (
+                                    <li key={label} className="space-y-2.5 min-w-0" aria-current={current ? 'step' : undefined}>
+                                      <span
+                                        className={`block h-1.5 rounded-full transition-colors duration-300 ${
+                                          done ? 'bg-[#0071e3]' : current ? 'bg-[#0071e3]/55' : 'bg-fill'
+                                        }`}
+                                      />
+                                      <span
+                                        className={`flex items-center gap-1.5 text-xs sm:text-sm truncate ${
+                                          current ? 'text-ink font-semibold' : done ? 'text-body' : 'text-dim'
+                                        }`}
+                                      >
+                                        {done && <Check className="hidden sm:block h-3.5 w-3.5 text-link flex-shrink-0" />}
+                                        <span className="truncate sm:hidden">{short}</span>
+                                        <span className="truncate hidden sm:inline">{label}</span>
+                                      </span>
+                                    </li>
+                                  );
+                                })}
+                              </ol>
+
+                              {finished ? (
+                                <div className="rounded-2xl bg-emerald-400/10 p-4 flex items-center gap-3">
+                                  <CheckCircle2 className="h-5 w-5 text-emerald-300 flex-shrink-0" />
+                                  <p className="text-sm text-emerald-300 font-medium">
+                                    Ready at bay <span className="tabular-nums">{order.bayCodeSnapshot}</span>. The customer has been told.
+                                  </p>
+                                </div>
+                              ) : next ? (
+                                <div className="rounded-2xl bg-inset p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                  <div className="min-w-0">
+                                    <p className="text-xs text-dim">Next step</p>
+                                    <p className="text-[15px] font-semibold text-ink mt-0.5">{next.label}</p>
+                                    <p className="text-sm text-muted mt-0.5">{next.open ? next.hint : lockHint}</p>
+                                  </div>
+                                  <button
+                                    onClick={() => handleTransition(next.to)}
+                                    disabled={!next.open}
+                                    className="w-full md:w-auto md:min-w-[200px] py-3 px-6 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white text-[15px] font-semibold transition active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
+                                  >
+                                    {next.label}
+                                  </button>
+                                </div>
+                              ) : null}
+
+                              {back && (
+                                <button
+                                  onClick={() => handleTransition(back.to)}
+                                  className="text-sm text-dim hover:text-ink transition cursor-pointer"
+                                >
+                                  {back.label}
+                                </button>
                               )}
-                            </div>
-                            <div className="text-[14px] font-semibold text-ink">Received (تم الاستلام)</div>
-                            <p className="text-sm text-dim">Order queued in tower dispatch</p>
-                          </div>
-                          <button
-                            onClick={() => handleTransition('NEW')}
-                            disabled={selectedOrder.status === 'NEW' || !canGo('NEW')}
-                            className={`${stagePrimary} ${
-                              selectedOrder.status === 'NEW'
-                                ? 'bg-fill text-dim'
-                                : 'bg-raised hover:bg-raised-strong text-ink'
-                            }`}
-                          >
-                            {selectedOrder.status === 'NEW' ? 'Active Stage' : 'Set to Received'}
-                          </button>
+                            </>
+                          )}
                         </div>
-
-                        {/* Stage 2 */}
-                        <div className={stageShell(selectedOrder.status === 'ASSIGNED', !open2 && selectedOrder.status !== 'ASSIGNED' && !selectedOrder.assignment)}>
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-semibold text-dim">Stage 2</span>
-                              {selectedOrder.status === 'ASSIGNED' ? (
-                                <span className="text-xs text-ink bg-fill px-2 py-0.5 rounded-full font-semibold">Current</span>
-                              ) : selectedOrder.assignment ? (
-                                <Check className="h-4 w-4 text-link" />
-                              ) : null}
-                            </div>
-                            <div className="text-[14px] font-semibold text-ink">Assigned (تم التعيين)</div>
-                            <div className="w-full bg-raised rounded-xl px-3 py-2 text-sm text-ink">TripleA Team</div>
-                          </div>
-                          <button
-                            onClick={() => handleTransition('ASSIGNED')}
-                            disabled={!open2 || selectedOrder.status === 'ASSIGNED'}
-                            className={`${stagePrimary} bg-[#0071e3] hover:bg-[#0077ed] text-white`}
-                          >
-                            <User className="h-4 w-4" />
-                            <span>{selectedOrder.status === 'ASSIGNED' ? 'Team assigned' : !open2 && st === 'NEW' ? lockHint : 'Assign team'}</span>
-                          </button>
-                        </div>
-
-                        {/* Stage 3 */}
-                        <div className={stageShell(stageIsCleaning, !open3 && !stageIsCleaning && !stageIsReady)}>
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-semibold text-dim">Stage 3</span>
-                              {stageIsCleaning ? (
-                                <span className="text-xs text-ink bg-fill px-2 py-0.5 rounded-full font-semibold animate-pulse">In Progress</span>
-                              ) : null}
-                            </div>
-                            <div className="text-[14px] font-semibold text-ink">Cleaning (جاري الغسيل)</div>
-                            <p className="text-sm text-dim">Hydro wash & interior detailing</p>
-                          </div>
-                          <button
-                            onClick={() => handleTransition('IN_PROGRESS')}
-                            disabled={!open3 || washLocked}
-                            className={`${stagePrimary} ${
-                              selectedOrder.status === 'IN_PROGRESS'
-                                ? 'bg-amber-400/15 text-amber-300 hover:bg-amber-400/25'
-                                : 'bg-[#0071e3] hover:bg-[#0077ed] text-white'
-                            }`}
-                          >
-                            <Sparkles className="h-4 w-4" />
-                            <span>{selectedOrder.status === 'IN_PROGRESS' ? 'Detailing Active' : !open3 ? (st === 'NEW' ? lockHint : washLocked ? 'Inspect the car first' : 'Start Wash') : 'Start Wash'}</span>
-                          </button>
-                        </div>
-
-                        {/* Stage 4 */}
-                        <div className={stageShell(stageIsReady, !open4 && !stageIsReady)}>
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-semibold text-dim">Stage 4</span>
-                              {stageIsReady ? (
-                                <span className="text-xs text-ink bg-fill px-2 py-0.5 rounded-full font-semibold">Ready</span>
-                              ) : null}
-                            </div>
-                            <div className="text-[14px] font-semibold text-ink">Ready at Bay (جاهزة بالموقف)</div>
-                            <p className="text-sm text-dim">
-                              Bay: <strong className="text-ink tabular-nums">{selectedOrder.bayCodeSnapshot}</strong>
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => handleTransition('RETURNED_TO_PARKING')}
-                            disabled={!open4}
-                            className={`${stagePrimary} ${
-                              stageIsReady
-                                ? 'bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25'
-                                : 'bg-[#0071e3] hover:bg-[#0077ed] text-white'
-                            }`}
-                          >
-                            <CheckCircle2 className="h-4 w-4" />
-                            <span>{selectedOrder.status === 'RETURNED_TO_PARKING' ? 'Confirmed Ready' : !open4 && (st === 'NEW' || st === 'ASSIGNED') ? lockHint : 'Mark Ready'}</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                      );
+                    })()}
 
                     {/* Details */}
                     <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
@@ -1545,7 +1524,7 @@ export default function AdminDashboardPage() {
                               </a>
                             </div>
                           ) : (
-                            <p className="text-sm text-dim">Use Stage 2 above to assign the TripleA Team.</p>
+                            <p className="text-sm text-dim">Use Assign team in Progress to give this order to the TripleA team.</p>
                           )}
                         </div>
 
