@@ -34,6 +34,45 @@ type Row = Record<string, unknown>;
 // -----------------------------------------------------------------------------
 let schemaV2: { ready: boolean; checkedAt: number } = { ready: false, checkedAt: 0 };
 
+// ---------------------------------------------------------------------------
+// Private files: signed links
+// ---------------------------------------------------------------------------
+/** A link is valid this long. Long enough to watch a video, short enough to stay private. */
+const LINK_LIFE_SECONDS = 4 * 60 * 60;
+/** A saved link is reused until it has less than this much life left. */
+const LINK_REUSE_MS = 60 * 60 * 1000;
+const linkCache = new Map<string, { url: string; expires: number }>();
+
+/**
+ * Signed links for a list of files. Each file is signed once and the same link is handed out again
+ * until it is close to expiring, so the screens do not get a new link on every refresh and the server
+ * does not sign hundreds of files every second.
+ */
+async function signedLinks(sb: SupabaseClient, bucket: string, paths: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const now = Date.now();
+  const missing: string[] = [];
+  // Keep the memory small over months: forget links that have run out
+  if (linkCache.size > 5000) {
+    for (const [key, v] of linkCache) if (v.expires <= now) linkCache.delete(key);
+  }
+  for (const path of paths) {
+    const hit = linkCache.get(`${bucket}|${path}`);
+    if (hit && hit.expires - now > LINK_REUSE_MS) out.set(path, hit.url);
+    else missing.push(path);
+  }
+  if (missing.length > 0) {
+    const { data } = await sb.storage.from(bucket).createSignedUrls(missing, LINK_LIFE_SECONDS);
+    for (const l of data || []) {
+      if (l.path && l.signedUrl) {
+        out.set(l.path, l.signedUrl);
+        linkCache.set(`${bucket}|${l.path}`, { url: l.signedUrl, expires: now + LINK_LIFE_SECONDS * 1000 });
+      }
+    }
+  }
+  return out;
+}
+
 export async function isSchemaV2(sb: SupabaseClient): Promise<boolean> {
   const now = Date.now();
   if (now - schemaV2.checkedAt < 30_000) return schemaV2.ready;
@@ -265,8 +304,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       .map((x: string) => x.slice('storage:'.length));
     const signed = new Map<string, string>();
     if (storagePaths.length > 0) {
-      const { data: links } = await sb.storage.from(PHOTO_BUCKET).createSignedUrls(storagePaths, 3600);
-      for (const l of links || []) if (l.path && l.signedUrl) signed.set(l.path, l.signedUrl);
+      for (const [path, url] of await signedLinks(sb, PHOTO_BUCKET, storagePaths)) signed.set(path, url);
     }
 
     const photos: OrderPhoto[] = (photosRes.data || []).map((p: Row) => {
@@ -327,8 +365,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
     }
     const inspectionLinks = new Map<string, string>();
     if (inspectionPaths.size > 0) {
-      const { data: links } = await sb.storage.from(INSPECTION_BUCKET).createSignedUrls(Array.from(inspectionPaths), 3600);
-      for (const l of links || []) if (l.path && l.signedUrl) inspectionLinks.set(l.path, l.signedUrl);
+      for (const [path, url] of await signedLinks(sb, INSPECTION_BUCKET, Array.from(inspectionPaths))) inspectionLinks.set(path, url);
     }
     const inspections: Inspection[] = inspectionRows.map((r) => ({
       id: String(r.id),
@@ -506,7 +543,7 @@ async function uploadPhoto(sb: SupabaseClient, photo: OrderPhoto): Promise<strin
     console.warn('Photo upload failed:', error.message);
     return null;
   }
-  const { data: link } = await sb.storage.from(PHOTO_BUCKET).createSignedUrl(path, 3600);
+  const { data: link } = await sb.storage.from(PHOTO_BUCKET).createSignedUrl(path, LINK_LIFE_SECONDS);
   return link ? `storage:${path}|${link.signedUrl}` : null;
 }
 
@@ -624,7 +661,7 @@ async function writeInspections(
       if (path && !path.startsWith(`${i.orderId}/`)) bad = true;
       if (!path && m.url.startsWith('data:')) {
         path = (await uploadInspectionDataUrl(sb, i.orderId, m.id, m.url)) || undefined;
-        if (path) result.photoUrls[m.id] = (await sb.storage.from(INSPECTION_BUCKET).createSignedUrl(path, 3600)).data?.signedUrl || '';
+        if (path) result.photoUrls[m.id] = (await sb.storage.from(INSPECTION_BUCKET).createSignedUrl(path, LINK_LIFE_SECONDS)).data?.signedUrl || '';
       }
       if (!path) bad = true;
       media.push({ id: m.id, kind: m.kind, angle: m.angle || null, path, createdAt: m.createdAt });
@@ -635,7 +672,7 @@ async function writeInspections(
       if (photoPath && !photoPath.startsWith(`${i.orderId}/`)) bad = true;
       if (!photoPath && d.photoUrl && d.photoUrl.startsWith('data:')) {
         photoPath = (await uploadInspectionDataUrl(sb, i.orderId, `dmg-${d.id}`, d.photoUrl)) || undefined;
-        if (photoPath) result.photoUrls[`dmg:${d.id}`] = (await sb.storage.from(INSPECTION_BUCKET).createSignedUrl(photoPath, 3600)).data?.signedUrl || '';
+        if (photoPath) result.photoUrls[`dmg:${d.id}`] = (await sb.storage.from(INSPECTION_BUCKET).createSignedUrl(photoPath, LINK_LIFE_SECONDS)).data?.signedUrl || '';
       }
       damages.push({
         id: d.id,

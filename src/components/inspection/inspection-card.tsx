@@ -6,9 +6,39 @@ import type { Inspection, Order } from '@/domain/types';
 import { DAMAGE_TYPES, INSPECTION_ANGLES } from '@/domain/inspection';
 import { formatDateTime } from '@/lib/utils';
 import { CarMap } from './car-map';
+import { SafeImage, SafeVideo } from '@/components/ui/safe-media';
+import { useLanguage } from '@/context/language-context';
 
 const SEVERITY_LABEL = { LOW: 'Light', MEDIUM: 'Medium', HIGH: 'Heavy' } as const;
 const SEVERITY_DOT = { LOW: 'bg-[#ff9f0a]', MEDIUM: 'bg-[#ff6b35]', HIGH: 'bg-[#ff453a]' } as const;
+
+/** The words the customer sees, in Arabic. The dashboard is always English. */
+const AR = {
+  videoBefore: 'فيديو قبل الغسيل',
+  videoAfter: 'فيديو بعد الغسيل',
+  beforeAfter: 'قبل وبعد',
+  photosBefore: 'صور قبل الغسيل',
+  before: 'قبل',
+  after: 'بعد',
+  damagesBefore: 'أضرار قبل الغسيل',
+  noDamage: 'لم تكن في السيارة أضرار ظاهرة.',
+  newDamage: 'أضرار جديدة بعد الغسيل',
+  nothingNew: 'لا شيء جديد. عادت السيارة كما دخلت.',
+  notes: 'ملاحظات: ',
+  closeUp: 'فتح الصورة المقربة',
+  angle: {
+    FRONT: ['الأمام', 'الأمام'],
+    FRONT_RIGHT: ['الأمام يمين', 'أمام ي'],
+    RIGHT: ['الجانب الأيمن', 'يمين'],
+    REAR_RIGHT: ['الخلف يمين', 'خلف ي'],
+    REAR: ['الخلف', 'الخلف'],
+    REAR_LEFT: ['الخلف يسار', 'خلف ش'],
+    LEFT: ['الجانب الأيسر', 'يسار'],
+    FRONT_LEFT: ['الأمام يسار', 'أمام ش'],
+  } as Record<string, [string, string]>,
+  damage: { SCRATCH: 'خدش', DENT: 'انبعاج', CRACK: 'كسر', PAINT: 'تقشر طلاء', OTHER: 'أخرى' } as Record<string, string>,
+  severity: { LOW: 'خفيف', MEDIUM: 'متوسط', HIGH: 'شديد' } as Record<string, string>,
+};
 
 function photoCount(i?: Inspection): number {
   return i ? new Set(i.media.filter((m) => m.kind === 'PHOTO' && m.angle).map((m) => m.angle)).size : 0;
@@ -194,7 +224,27 @@ interface InspectionSummaryProps {
 }
 
 export function InspectionSummary({ before, after, onOpenImage }: InspectionSummaryProps) {
+  const { isRtl } = useLanguage();
   if (!before) return null;
+  // Labels in the customer's language
+  const w = {
+    videoBefore: isRtl ? AR.videoBefore : 'Video before the wash',
+    videoAfter: isRtl ? AR.videoAfter : 'Video after the wash',
+    beforeAfter: isRtl ? AR.beforeAfter : 'Before and after',
+    photosBefore: isRtl ? AR.photosBefore : 'Photos before the wash',
+    before: isRtl ? AR.before : 'before',
+    after: isRtl ? AR.after : 'after',
+    damagesBefore: isRtl ? AR.damagesBefore : 'Damages before the wash',
+    noDamage: isRtl ? AR.noDamage : 'The car had no visible damage.',
+    newDamage: isRtl ? AR.newDamage : 'New damage found after the wash',
+    nothingNew: isRtl ? AR.nothingNew : 'Nothing new. The car came back the way it went in.',
+    notes: isRtl ? AR.notes : 'Notes: ',
+    closeUp: isRtl ? AR.closeUp : 'Open the close-up',
+  };
+  const angleLabel = (a: { key: string; label: string; short: string }) => (isRtl ? AR.angle[a.key]?.[0] || a.label : a.label);
+  const angleShort = (a: { key: string; label: string; short: string }) => (isRtl ? AR.angle[a.key]?.[1] || a.short : a.short);
+  const damageLabel = (type: string) => (isRtl ? AR.damage[type] : DAMAGE_TYPES.find((t) => t.key === type)?.label) || type;
+  const severityLabel = (sev: keyof typeof SEVERITY_LABEL) => (isRtl ? AR.severity[sev] : SEVERITY_LABEL[sev]);
   const beforeVideo = before.media.find((m) => m.kind === 'VIDEO');
   const afterVideo = after?.media.find((m) => m.kind === 'VIDEO');
   const newDamages = after?.damages || [];
@@ -208,23 +258,23 @@ export function InspectionSummary({ before, after, onOpenImage }: InspectionSumm
       {beforeVideo && (
         <div className="space-y-2">
           <p className="text-sm font-semibold text-ink flex items-center gap-2">
-            <Video className="h-4 w-4 text-muted" /> Video before the wash
+            <Video className="h-4 w-4 text-muted" /> {w.videoBefore}
           </p>
-          <video src={beforeVideo.url} controls playsInline className="w-full rounded-2xl bg-black max-h-[50vh]" />
+          <SafeVideo src={beforeVideo.url} className="w-full rounded-2xl bg-black max-h-[50vh]" />
         </div>
       )}
       {afterVideo && (
         <div className="space-y-2">
           <p className="text-sm font-semibold text-ink flex items-center gap-2">
-            <Video className="h-4 w-4 text-muted" /> Video after the wash
+            <Video className="h-4 w-4 text-muted" /> {w.videoAfter}
           </p>
-          <video src={afterVideo.url} controls playsInline className="w-full rounded-2xl bg-black max-h-[50vh]" />
+          <SafeVideo src={afterVideo.url} className="w-full rounded-2xl bg-black max-h-[50vh]" />
         </div>
       )}
 
       {!beforeVideo && (
         <div className="space-y-2">
-          <p className="text-sm font-semibold text-ink">{after ? 'Before and after' : 'Photos before the wash'}</p>
+          <p className="text-sm font-semibold text-ink">{after ? w.beforeAfter : w.photosBefore}</p>
           <div className={`grid gap-2 ${after ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-4'}`}>
             {INSPECTION_ANGLES.map((a) => {
               const b = shot(before, a.key);
@@ -234,29 +284,27 @@ export function InspectionSummary({ before, after, onOpenImage }: InspectionSumm
                   <button
                     onClick={() => b && onOpenImage(b.url)}
                     className="relative aspect-[4/3] rounded-xl overflow-hidden bg-inset"
-                    aria-label={`${a.label}, before`}
+                    aria-label={`${angleLabel(a)}, ${w.before}`}
                   >
                     {b ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={b.url} alt={`${a.label} before`} className="absolute inset-0 w-full h-full object-cover" />
+                      <SafeImage src={b.url} alt={`${angleLabel(a)} ${w.before}`} className="absolute inset-0 w-full h-full object-cover" />
                     ) : null}
                     <span className="absolute bottom-1 start-1 px-2 py-0.5 rounded-full bg-black/60 text-[11px] text-white">
-                      {a.short}
-                      {after ? ' · before' : ''}
+                      {angleShort(a)}
+                      {after ? ` · ${w.before}` : ''}
                     </span>
                   </button>
                   {after && (
                     <button
                       onClick={() => af && onOpenImage(af.url)}
                       className="relative aspect-[4/3] rounded-xl overflow-hidden bg-inset"
-                      aria-label={`${a.label}, after`}
+                      aria-label={`${angleLabel(a)}, ${w.after}`}
                     >
                       {af ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={af.url} alt={`${a.label} after`} className="absolute inset-0 w-full h-full object-cover" />
+                        <SafeImage src={af.url} alt={`${angleLabel(a)} ${w.after}`} className="absolute inset-0 w-full h-full object-cover" />
                       ) : null}
                       <span className="absolute bottom-1 start-1 px-2 py-0.5 rounded-full bg-black/60 text-[11px] text-white">
-                        {a.short} · after
+                        {angleShort(a)} · {w.after}
                       </span>
                     </button>
                   )}
@@ -270,10 +318,10 @@ export function InspectionSummary({ before, after, onOpenImage }: InspectionSumm
       {/* damages */}
       <div className="space-y-2">
         <p className="text-sm font-semibold text-ink">
-          Damages before the wash <span className="text-dim font-normal">({before.damages.length})</span>
+          {w.damagesBefore} <span className="text-dim font-normal">({before.damages.length})</span>
         </p>
         {before.damages.length === 0 ? (
-          <p className="text-sm text-muted">The car had no visible damage.</p>
+          <p className="text-sm text-muted">{w.noDamage}</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-4 items-start">
             <CarMap mode="view" damages={before.damages} className="w-full max-w-[140px] mx-auto" />
@@ -281,15 +329,14 @@ export function InspectionSummary({ before, after, onOpenImage }: InspectionSumm
               {before.damages.map((d, i) => (
                 <div key={d.id} className="flex items-center gap-3 rounded-2xl bg-inset p-3">
                   {d.photoUrl && (
-                    <button onClick={() => onOpenImage(d.photoUrl!)} className="flex-shrink-0" aria-label="Open the close-up">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={d.photoUrl} alt="" className="w-14 h-14 rounded-xl object-cover" />
+                    <button onClick={() => onOpenImage(d.photoUrl!)} className="flex-shrink-0" aria-label={w.closeUp}>
+                      <SafeImage src={d.photoUrl} alt="" className="w-14 h-14 rounded-xl object-cover" />
                     </button>
                   )}
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-ink flex items-center gap-2">
                       <span className={`w-2.5 h-2.5 rounded-full ${SEVERITY_DOT[d.severity]}`} />
-                      {i + 1}. {DAMAGE_TYPES.find((t) => t.key === d.type)?.label} · {SEVERITY_LABEL[d.severity]}
+                      {i + 1}. {damageLabel(d.type)} · {severityLabel(d.severity)}
                     </p>
                     {d.note && <p className="text-xs text-muted">{d.note}</p>}
                   </div>
@@ -303,22 +350,21 @@ export function InspectionSummary({ before, after, onOpenImage }: InspectionSumm
       {after && (
         <div className="space-y-2">
           <p className="text-sm font-semibold text-ink">
-            New damage found after the wash <span className="text-dim font-normal">({newDamages.length})</span>
+            {w.newDamage} <span className="text-dim font-normal">({newDamages.length})</span>
           </p>
           {newDamages.length === 0 ? (
-            <p className="text-sm text-emerald-300">Nothing new. The car came back the way it went in.</p>
+            <p className="text-sm text-emerald-300">{w.nothingNew}</p>
           ) : (
             newDamages.map((d) => (
               <div key={d.id} className="flex items-center gap-3 rounded-2xl bg-rose-400/10 p-3">
                 {d.photoUrl && (
-                  <button onClick={() => onOpenImage(d.photoUrl!)} className="flex-shrink-0" aria-label="Open the close-up">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={d.photoUrl} alt="" className="w-14 h-14 rounded-xl object-cover" />
+                  <button onClick={() => onOpenImage(d.photoUrl!)} className="flex-shrink-0" aria-label={w.closeUp}>
+                    <SafeImage src={d.photoUrl} alt="" className="w-14 h-14 rounded-xl object-cover" />
                   </button>
                 )}
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-rose-300">
-                    {DAMAGE_TYPES.find((t) => t.key === d.type)?.label} · {SEVERITY_LABEL[d.severity]}
+                    {damageLabel(d.type)} · {severityLabel(d.severity)}
                   </p>
                   {d.note && <p className="text-xs text-muted">{d.note}</p>}
                 </div>
@@ -330,7 +376,7 @@ export function InspectionSummary({ before, after, onOpenImage }: InspectionSumm
 
       {before.notes && (
         <p className="text-sm text-muted">
-          <span className="text-ink font-medium">Notes: </span>
+          <span className="text-ink font-medium">{w.notes}</span>
           {before.notes}
         </p>
       )}

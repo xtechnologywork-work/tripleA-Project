@@ -20,6 +20,7 @@ import {
 } from '../../domain/types';
 import { validateInspection, requiresPreWashInspection, isCleared } from '../../domain/inspection';
 import { ActorContext, hasPermission, getAllowedTransitions, isValidStaffTransition } from '../../domain/status-machine';
+import { keepFreshLinks } from '@/lib/media-urls';
 
 const STORAGE_KEY = 'cb_supabase_live_v2';
 const SYNC_CHANNEL_NAME = 'cb_cross_tab_sync';
@@ -332,6 +333,8 @@ class MockStore {
           // Re-check: a change may have been made while the request was in flight
           if (this.db && this.hasUnsyncedChanges()) return;
           this.lastServerVersion = data.version;
+          // A file link the screen already has stays the same while it is still good (no flashing photos, no restarting videos)
+          keepFreshLinks(data.db, this.db);
           const serialized = JSON.stringify(data.db);
           const unchanged = this.baselineLoaded && serialized === this.lastServerJson;
           this.lastServerJson = serialized;

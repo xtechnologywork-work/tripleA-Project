@@ -106,10 +106,19 @@ export async function uploadInspectionFile(orderId: string, blob: Blob, kind: 'P
     throw new Error(data.error || 'Could not prepare the upload. Check your connection.');
   }
 
-  const { error } = await sb.storage
-    .from('inspections')
-    .uploadToSignedUrl(data.path, data.token, blob, { contentType: blob.type || (kind === 'VIDEO' ? 'video/mp4' : 'image/jpeg') });
-  if (error) throw new Error('Upload failed. Check your connection and try again.');
-
-  return { mediaId, path: data.path, url: URL.createObjectURL(blob) };
+  // On a weak connection a long upload can drop. Try again up to three times before giving up.
+  const contentType = blob.type || (kind === 'VIDEO' ? 'video/mp4' : 'image/jpeg');
+  let lastError = '';
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { error } = await sb.storage.from('inspections').uploadToSignedUrl(data.path, data.token, blob, { contentType, upsert: true });
+    if (!error) return { mediaId, path: data.path, url: URL.createObjectURL(blob) };
+    lastError = error.message || '';
+    // A file that is too big will not get smaller by trying again
+    if (/size|exceed|too large|limit/i.test(lastError)) break;
+    await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+  }
+  if (/size|exceed|too large|limit/i.test(lastError)) {
+    throw new Error('The file is larger than the storage limit. Record a shorter video, or raise the file size limit in Supabase Storage settings.');
+  }
+  throw new Error('Upload failed. Check your connection and try again.');
 }

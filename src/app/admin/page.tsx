@@ -7,6 +7,7 @@ import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { getSupabase } from '@/lib/supabase';
 import { InsightsView } from '@/components/admin/insights';
+import { SafeImage } from '@/components/ui/safe-media';
 import type { DataSet } from '@/domain/analytics';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
@@ -1490,8 +1491,7 @@ export default function AdminDashboardPage() {
                               onClick={() => setLightboxPhoto(selectedOrderPhotos[0].blobKey)}
                               className="relative rounded-2xl overflow-hidden h-56 bg-canvas group cursor-pointer"
                             >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
+                              <SafeImage
                                 src={selectedOrderPhotos[0].blobKey}
                                 alt="Rear Vehicle Verification"
                                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"

@@ -8,6 +8,7 @@ import type { Inspection, InspectionAngle, InspectionDamage, InspectionMedia, In
 import { DAMAGE_SEVERITIES, DAMAGE_TYPES, INSPECTION_ANGLES, validateInspection } from '@/domain/inspection';
 import { stampPhoto, uploadInspectionFile } from '@/lib/inspection-media';
 import { CarMap } from './car-map';
+import { SafeImage, SafeVideo } from '@/components/ui/safe-media';
 
 type Step = 'photos' | 'damages' | 'review';
 
@@ -335,8 +336,8 @@ export function InspectionFlow({ order, phase, actor, editing = false, onClose, 
                     aria-label={a.label}
                   >
                     {shot ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={shot.url} alt={a.label} className="absolute inset-0 w-full h-full object-cover" />
+                       
+                      <SafeImage src={shot.url} alt={a.label} className="absolute inset-0 w-full h-full object-cover" />
                     ) : (
                       <span>{a.short}</span>
                     )}
@@ -371,7 +372,7 @@ export function InspectionFlow({ order, phase, actor, editing = false, onClose, 
               />
               {video ? (
                 <div className="space-y-2">
-                  <video src={video.url} controls playsInline className="w-full rounded-2xl bg-black max-h-[40vh]" />
+                  <SafeVideo src={video.url} className="w-full rounded-2xl bg-black max-h-[40vh]" />
                   <button onClick={() => removeMedia(video.id)} className="flex items-center gap-1.5 text-sm text-rose-300">
                     <Trash2 className="h-4 w-4" />
                     <span>Delete video</span>
@@ -423,8 +424,8 @@ export function InspectionFlow({ order, phase, actor, editing = false, onClose, 
                     className={`flex items-center gap-3 bg-tile rounded-2xl p-3 ${selectedDamageId === d.id ? 'ring-2 ring-[#2997ff]' : ''}`}
                   >
                     {d.photoUrl && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={d.photoUrl} alt="" className="w-14 h-14 rounded-xl object-cover flex-shrink-0" />
+                       
+                      <SafeImage src={d.photoUrl} alt="" className="w-14 h-14 rounded-xl object-cover flex-shrink-0" />
                     )}
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold flex items-center gap-2">
@@ -620,8 +621,8 @@ export function InspectionFlow({ order, phase, actor, editing = false, onClose, 
               />
               {dmgPhoto ? (
                 <div className="flex items-center gap-3">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={dmgPhoto.url} alt="Damage close-up" className="w-20 h-20 rounded-2xl object-cover" />
+                  { }
+                  <SafeImage src={dmgPhoto.url} alt="Damage close-up" className="w-20 h-20 rounded-2xl object-cover" />
                   <button onClick={() => damageInput.current?.click()} className="flex items-center gap-1.5 text-sm text-link">
                     <RotateCcw className="h-4 w-4" />
                     <span>Retake</span>

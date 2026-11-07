@@ -7,6 +7,7 @@ import { mockStore } from '@/data/mock/store';
 import { Order, OrderEvent, OrderPhoto } from '@/domain/types';
 import { formatDateTime, formatQAR, plateLabel, serviceName } from '@/lib/utils';
 import { SUPPORT_WHATSAPP } from '@/lib/support';
+import { SafeImage } from '@/components/ui/safe-media';
 import {
   ArrowLeft,
   ArrowRight,
@@ -407,8 +408,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                 }}
                 className="relative rounded-2xl overflow-hidden h-52 bg-black/50 group cursor-pointer"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
+                <SafeImage
                   src={photos[0].blobKey}
                   alt={isRtl ? 'صورة مؤخرة السيارة' : 'Rear of the car'}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -588,8 +588,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               </button>
             </div>
             <div className="relative max-h-[70vh] overflow-hidden rounded-2xl bg-canvas flex items-center justify-center">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={lightboxPhoto} alt={isRtl ? 'صورة اللوحة بحجم كامل' : 'Rear plate photo, full size'} className="w-full h-auto max-h-[70vh] object-contain" />
+              <SafeImage src={lightboxPhoto} alt={isRtl ? 'صورة اللوحة بحجم كامل' : 'Rear plate photo, full size'} className="w-full h-auto max-h-[70vh] object-contain" />
             </div>
           </div>
         </div>
