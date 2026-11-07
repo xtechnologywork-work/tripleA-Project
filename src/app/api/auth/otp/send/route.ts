@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { LIMITS, RESEND_SECONDS, qatarMobile, type OtpError } from '@/domain/otp';
-import { twilioConfig, sendCode } from '@/lib/twilio-verify';
+import { twilioConfig, sendCode, lastTwilioRefusal } from '@/lib/twilio-verify';
 import { underLimits, recordEvents } from '@/lib/otp-limits';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
 import { signPendingSignup } from '@/lib/employee-session';
@@ -66,12 +66,15 @@ export async function POST(req: Request) {
   }
 
   const config = twilioConfig();
-  if (!config) return fail('NOT_READY', 503);
+  if (!config) {
+    console.error('Twilio settings are missing or malformed');
+    return NextResponse.json({ error: 'NOT_READY', twilio: 'settings' }, { status: 503 });
+  }
   const sent = await sendCode(config, phone, body.lang === 'ar' ? 'ar' : 'en');
   if (!sent.ok) {
     const status = sent.error === 'TOO_MANY' ? 429 : sent.error === 'NOT_READY' ? 503 : 400;
-    if (sent.error === 'NOT_READY' || sent.error === 'FAILED') console.error('Twilio send failed:', sent.error);
-    return fail(sent.error, status);
+    // The Twilio error number helps support find the cause; it holds nothing secret
+    return NextResponse.json({ error: sent.error, twilio: lastTwilioRefusal }, { status });
   }
   return NextResponse.json({ ok: true, pending, resendIn: RESEND_SECONDS });
 }

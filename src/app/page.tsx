@@ -419,7 +419,9 @@ function BayOrderingClientScreen() {
       const action = authMode === 'LOGIN' ? 'login' : 'signup';
       const { ok, data } = await requestCode(action, qatarNumber);
       if (!ok) {
-        setPhoneError(authErrorText(data.error));
+        // A Twilio error number, when there is one, helps the team find the cause
+        const ref = data.twilio?.code ? ` (${data.twilio.code})` : data.twilio?.status ? ` (${data.twilio.status})` : '';
+        setPhoneError(authErrorText(data.error) + ref);
         return;
       }
       const state = { phone: qatarNumber, action: action as 'login' | 'signup', pending: data.pending as string | undefined };

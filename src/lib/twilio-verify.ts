@@ -56,6 +56,9 @@ function request(config: TwilioConfig, path: string, fields: Record<string, stri
   });
 }
 
+/** The last refusal from Twilio (status and Twilio error code, never any secret), for the server log and support. */
+export let lastTwilioRefusal: { status: number; code?: number } | null = null;
+
 async function readError(res: { status: number; json: () => Promise<unknown> }): Promise<OtpError> {
   let code: number | undefined;
   try {
@@ -64,6 +67,8 @@ async function readError(res: { status: number; json: () => Promise<unknown> }):
   } catch {
     // no body
   }
+  lastTwilioRefusal = { status: res.status, code };
+  console.error(`Twilio Verify refused: HTTP ${res.status}${code ? `, Twilio error ${code}` : ''}`);
   return twilioError(res.status, code);
 }
 
