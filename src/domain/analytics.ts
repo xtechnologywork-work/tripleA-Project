@@ -314,6 +314,9 @@ const minutesBetween = (from: number | undefined, to: number | undefined): numbe
   return m >= 0 ? m : null;
 };
 
+/** An order made when the customer opened the online payment page, and not paid (yet). It is not money and not a wash. */
+export const awaitingOnlinePayment = (o: Order): boolean => o.paymentStatus === 'UNPAID' && String(o.idempotencyKey || '').startsWith('pay:');
+
 /** What the order cost the employee, per wash. A pass wash costs the pass price divided by its washes. */
 export function effectiveWashMinor(order: Order, subscriptions: EmployeeSubscription[]): number {
   if (order.paymentMode !== 'CREDIT') return order.priceSnapshot?.amountMinor || 0;
@@ -336,8 +339,9 @@ export function computeSummary(data: DataSet, range: Range): Summary {
   const { orders, events, subscriptions, employees, inspections, issues } = data;
   const nameOf = new Map(employees.map((e) => [e.id, e.fullName]));
 
-  const inPeriod = orders.filter((o) => inRange(ms(o.createdAt), range));
-  const live = inPeriod.filter((o) => o.status !== 'CANCELLED');
+  // Orders waiting for an online payment that never came are not orders yet
+  const inPeriod = orders.filter((o) => inRange(ms(o.createdAt), range) && !awaitingOnlinePayment(o));
+  const live = inPeriod.filter((o) => o.status !== 'CANCELLED' && !awaitingOnlinePayment(o));
   const cancelled = inPeriod.filter((o) => o.status === 'CANCELLED');
   const delivered = inPeriod.filter((o) => o.status === 'RETURNED_TO_PARKING');
   const singles = live.filter((o) => o.paymentMode === 'ONE_TIME');
@@ -380,7 +384,7 @@ export function computeSummary(data: DataSet, range: Range): Summary {
   // ---- customers ----
   const firstOrderAt = new Map<string, number>();
   for (const o of orders) {
-    if (o.status === 'CANCELLED') continue;
+    if (o.status === 'CANCELLED' || awaitingOnlinePayment(o)) continue;
     const t = ms(o.createdAt);
     if (!Number.isFinite(t)) continue;
     const prev = firstOrderAt.get(o.employeeId);
@@ -396,7 +400,7 @@ export function computeSummary(data: DataSet, range: Range): Summary {
   for (const s of soldPasses) {
     const boughtAt = ms(s.activatedAt);
     const hadSingleBefore = orders.some(
-      (o) => o.employeeId === s.employeeId && o.paymentMode === 'ONE_TIME' && o.status !== 'CANCELLED' && ms(o.createdAt) < boughtAt
+      (o) => o.employeeId === s.employeeId && o.paymentMode === 'ONE_TIME' && o.status !== 'CANCELLED' && !awaitingOnlinePayment(o) && ms(o.createdAt) < boughtAt
     );
     if (hadSingleBefore) converted += 1;
   }
@@ -548,7 +552,7 @@ export function computeSummary(data: DataSet, range: Range): Summary {
 // ---------------------------------------------------------------------------
 export function computePulse(data: DataSet, now: number): Pulse {
   const { orders, events } = data;
-  const active = orders.filter((o) => o.status !== 'RETURNED_TO_PARKING' && o.status !== 'CANCELLED');
+  const active = orders.filter((o) => o.status !== 'RETURNED_TO_PARKING' && o.status !== 'CANCELLED' && !awaitingOnlinePayment(o));
   const times = stageTimesByOrder(active, events);
 
   // When the order entered the stage it is in now (the latest time it moved there)

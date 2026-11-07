@@ -15,6 +15,7 @@ import {
   type PaymentStatus,
 } from '@/domain/payments';
 import type { MockDatabase } from '@/data/mock/seed';
+import type { CreditLedgerEntry, EmployeeSubscription } from '@/domain/types';
 
 /** Online payment is on when PAYMENTS_ENABLED is "true" and MyFatoorah is set up. */
 export const paymentsEnabled = () => process.env.PAYMENTS_ENABLED === 'true' && !!myFatoorahConfig();
@@ -176,15 +177,87 @@ export async function confirmPayment(key: string, keyType: 'PaymentId' | 'Invoic
   }
 }
 
+/**
+ * Makes the order when the customer reaches the payment page, marked "not paid" (so the team sees it even if
+ * the customer never pays). Same ids as the paid order, so it is made only once.
+ */
+export async function createUnpaidOrder(intent: PaymentIntent): Promise<{ id: string; reference: string } | null> {
+  try {
+    const db = await loadState();
+    if (!db) return null;
+    const ids = fulfillmentIds(intent.id);
+    const existing = (db.orders || []).find((o) => o.id === ids.order);
+    if (existing) return { id: existing.id, reference: existing.reference };
+    const employee = (db.employees || []).find((e) => e.id === intent.employeeId);
+    const service = pickService(db.services || []);
+    if (!employee || !service) return null;
+
+    const now = new Date().toISOString();
+    let reference = await makeReference(db, now);
+    const f = buildFulfillment({ intent, employee, service, pkg: pickPackage(db.packages || []), activePass: null, reference, now, paid: false });
+    if (onSupabase()) {
+      const result = await applyChanges({ orders: [f.order], orderEvents: f.events, photos: f.photos }, { admin: true });
+      if (!result.ok || result.rejected.length) {
+        console.error('Making the unpaid order failed:', result.error || result.rejected.join('; '));
+        return null;
+      }
+      reference = result.referenceFixes[f.order.id] || reference;
+    } else {
+      mergeLocal({ orders: [f.order], orderEvents: f.events, photos: f.photos });
+    }
+    return { id: f.order.id, reference };
+  } catch (err) {
+    console.error('Making the unpaid order failed:', err);
+    return null;
+  }
+}
+
 /** Makes the order (and the pass) for a paid payment. The ids come from the payment, so it never doubles. */
 async function fulfill(intent: PaymentIntent): Promise<string> {
   const db = await loadState();
   if (!db) throw new Error('No data');
   const ids = fulfillmentIds(intent.id);
 
-  // Already made (a second call): hand back its reference
+  // The order was made when the customer reached the payment page: now it becomes paid
   const existing = (db.orders || []).find((o) => o.id === ids.order);
   if (existing) {
+    if (existing.paymentStatus !== 'PAID_ONLINE') {
+      const employee = (db.employees || []).find((e) => e.id === intent.employeeId);
+      const service = pickService(db.services || []);
+      const cancelled = existing.status === 'CANCELLED';
+      let credits: CreditLedgerEntry[] = [];
+      let subscriptions: EmployeeSubscription[] = [];
+      if (intent.plan === 'pass' && employee && service) {
+        const activePass =
+          (db.subscriptions || []).find((s) => s.employeeId === employee.id && s.status === 'ACTIVE' && s.id !== ids.subscription) || null;
+        const f = buildFulfillment({
+          intent, employee, service, pkg: pickPackage(db.packages || []), activePass, reference: existing.reference, now: new Date().toISOString(),
+        });
+        subscriptions = f.subscriptions;
+        // A wash the team already cancelled does not use a wash of the new pass
+        credits = cancelled ? f.credits.filter((c) => c.type !== 'DEBIT') : f.credits;
+      }
+      const usesCredit = intent.plan === 'pass' && !cancelled;
+      if (onSupabase()) {
+        if (credits.length || subscriptions.length) {
+          const result = await applyChanges({ credits, subscriptions }, { admin: true });
+          if (!result.ok) throw new Error(result.error || 'Saving the pass failed');
+          if (result.rejected.length) throw new Error(result.rejected.join('; '));
+        }
+        // Only the payment fields change, so work the team did on the order since is kept
+        const { error } = await getServerSupabase()!
+          .from('orders')
+          .update({ payment_status: 'PAID_ONLINE', credits_used: usesCredit ? 1 : 0, updated_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        if (error) throw new Error(error.message);
+      } else {
+        mergeLocal({
+          orders: [{ ...existing, paymentStatus: 'PAID_ONLINE', creditsUsed: usesCredit ? 1 : 0, updatedAt: new Date().toISOString() }],
+          credits,
+          subscriptions,
+        });
+      }
+    }
     await savePayment({ ...intent, status: 'FULFILLED', orderId: existing.id, orderReference: existing.reference });
     return existing.reference;
   }

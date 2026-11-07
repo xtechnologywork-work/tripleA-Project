@@ -376,3 +376,16 @@ test('csv escapes commas and quotes and covers every day', () => {
   assert.equal(lines.filter((l) => /^\d{4}-\d{2}-\d{2},/.test(l)).length, 7);
   assert.ok(csv.includes('Revenue, total (QAR),20.00') || csv.includes('"Revenue, total (QAR)",20.00'));
 });
+
+test('an order waiting for an online payment is not revenue, not an order, and not waiting in the queue', () => {
+  const d = empty();
+  d.orders = [
+    order({ idempotencyKey: 'pay:abc', paymentStatus: 'UNPAID' }),
+    order({ idempotencyKey: 'pay:def', paymentStatus: 'PAID_ONLINE' }),
+    order({ idempotencyKey: 'k2', paymentStatus: 'UNPAID' }), // paid at handover: counts as before
+  ];
+  const s = computeSummary(d, TODAY);
+  assert.equal(s.orders.created, 2);
+  assert.equal(s.revenue.singleMinor, 4000);
+  assert.equal(computePulse(d, NOW).waiting, 2);
+});

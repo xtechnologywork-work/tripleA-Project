@@ -132,8 +132,11 @@ export function buildFulfillment(args: {
   activePass: EmployeeSubscription | null;
   reference: string;
   now: string;
+  /** false: the order is made when the customer reaches the payment page, marked not paid, with no pass yet */
+  paid?: boolean;
 }): Fulfillment {
   const { intent, employee, service, pkg, activePass, reference, now } = args;
+  const paid = args.paid !== false;
   const ids = fulfillmentIds(intent.id);
   const d = intent.draft;
   const isPass = intent.plan === 'pass';
@@ -142,7 +145,7 @@ export function buildFulfillment(args: {
   const credits: CreditLedgerEntry[] = [];
   let passId = activePass?.id;
 
-  if (isPass) {
+  if (isPass && paid) {
     if (!pkg) throw new Error('No pass package');
     const washes = pkg.paidWashes + pkg.bonusWashes;
     if (!activePass) {
@@ -202,8 +205,8 @@ export function buildFulfillment(args: {
     serviceSnapshot: service,
     paymentMode: isPass ? 'CREDIT' : 'ONE_TIME',
     priceSnapshot: { amountMinor: intent.amountMinor, currency: 'QAR' },
-    creditsUsed: isPass ? 1 : 0,
-    paymentStatus: 'PAID_ONLINE',
+    creditsUsed: isPass && paid ? 1 : 0,
+    paymentStatus: paid ? 'PAID_ONLINE' : 'UNPAID',
     instructions: d.notes,
     status: 'NEW',
     idempotencyKey: `pay:${intent.id}`,
@@ -219,7 +222,7 @@ export function buildFulfillment(args: {
       to: 'NEW',
       type: 'CREATED',
       actor: { type: 'EMPLOYEE', id: employee.id, name: employee.fullName },
-      payload: { paidOnline: true, paymentId: intent.paymentId, invoiceId: intent.invoiceId },
+      payload: { paidOnline: paid, awaitingPayment: !paid, paymentId: intent.paymentId, invoiceId: intent.invoiceId },
       createdAt: now,
     },
   ];

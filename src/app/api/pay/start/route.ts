@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { verifyEmployeeToken } from '@/lib/employee-session';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
 import { myFatoorahConfig, createPaymentPage } from '@/lib/myfatoorah';
-import { paymentsEnabled, savePayment } from '@/lib/payments';
+import { paymentsEnabled, savePayment, createUnpaidOrder } from '@/lib/payments';
 import { fetchSupabaseState, storePaymentPhoto } from '@/lib/supabase-sync';
 import { isServerSupabaseConfigured } from '@/lib/supabase-server';
 import { getLocalDb } from '@/lib/local-db';
@@ -22,7 +22,7 @@ function siteUrl(req: Request): string {
 
 /**
  * Step 1 of paying: checks the order details, saves them as waiting for payment, and returns the MyFatoorah page.
- * No order exists until the payment is confirmed.
+ * The order is made now, marked not paid, and turns paid when the payment is confirmed.
  */
 export async function POST(req: Request) {
   if (!paymentsEnabled()) return fail('PAYMENTS_OFF', 503);
@@ -86,6 +86,8 @@ export async function POST(req: Request) {
     await savePayment({ ...intent, status: 'FAILED' });
     return fail('GATEWAY', 502);
   }
-  await savePayment({ ...intent, invoiceId: page.page.invoiceId });
+  // The team sees the order right away, marked not paid; it turns paid when MyFatoorah confirms
+  const made = await createUnpaidOrder(intent);
+  await savePayment({ ...intent, invoiceId: page.page.invoiceId, orderId: made?.id, orderReference: made?.reference });
   return NextResponse.json({ url: page.page.url, paymentRef: id });
 }

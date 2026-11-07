@@ -166,3 +166,12 @@ test('the webhook signature string follows the documented order', () => {
   const sig = crypto.createHmac('sha256', 'secret').update(s, 'utf8').digest('base64');
   assert.match(sig, /^[A-Za-z0-9+/]+=*$/);
 });
+
+test('an order made when the customer reaches the payment page is marked not paid and has no pass yet', () => {
+  const f = buildFulfillment({ intent: intent({ plan: 'pass', amountMinor: 14000 }), employee: EMP, service: SERVICE, pkg: PKG, activePass: null, reference: 'CB-1', now: NOW, paid: false });
+  assert.equal(f.order.paymentStatus, 'UNPAID');
+  assert.equal(f.order.creditsUsed, 0);
+  assert.equal(f.order.id, fulfillmentIds('abc-123').order);
+  assert.equal(f.credits.length, 0);
+  assert.equal(f.subscriptions.length, 0);
+});

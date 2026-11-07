@@ -493,6 +493,9 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                   {order.paymentStatus === 'PAID_ONLINE' && (
                     <span className="ms-2 text-xs font-medium text-emerald-400">{isRtl ? 'مدفوع' : 'Paid'}</span>
                   )}
+                  {order.paymentStatus === 'UNPAID' && (
+                    <span className="ms-2 text-xs font-medium text-amber-300">{isRtl ? 'غير مدفوع' : 'Not paid'}</span>
+                  )}
                 </dd>
               </div>
             </dl>

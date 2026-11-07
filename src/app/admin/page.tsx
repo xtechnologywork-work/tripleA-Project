@@ -10,6 +10,7 @@ import { InsightsView } from '@/components/admin/insights';
 import { QrPage } from '@/components/admin/qr-page';
 import { SafeImage } from '@/components/ui/safe-media';
 import type { DataSet } from '@/domain/analytics';
+import { awaitingOnlinePayment } from '@/domain/analytics';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
 import { isCleared } from '@/domain/inspection';
@@ -530,7 +531,7 @@ export default function AdminDashboardPage() {
   const metrics = useMemo(() => {
     // Cancelled orders are not revenue, and a wash paid with a pass credit was paid when the pass was bought
     const totalRevenueMinor = orders
-      .filter((o) => o.status !== 'CANCELLED' && o.paymentMode === 'ONE_TIME')
+      .filter((o) => o.status !== 'CANCELLED' && o.paymentMode === 'ONE_TIME' && !awaitingOnlinePayment(o))
       .reduce((acc, o) => acc + (o.priceSnapshot?.amountMinor || 0), 0);
     const subRevenueMinor = subscriptions.filter((s) => s.status === 'ACTIVE').length * 14000;
     const combinedRevenue = totalRevenueMinor + subRevenueMinor;
@@ -543,7 +544,7 @@ export default function AdminDashboardPage() {
     const completed = orders.filter((o) => o.status === 'RETURNED_TO_PARKING').length;
 
     const savingsQar =
-      orders.filter((o) => o.paymentMode === 'CREDIT' || (o.priceSnapshot?.amountMinor || 0) <= 2000).length * 10 +
+      orders.filter((o) => !awaitingOnlinePayment(o) && (o.paymentMode === 'CREDIT' || (o.priceSnapshot?.amountMinor || 0) <= 2000)).length * 10 +
       subscriptions.filter((s) => s.status === 'ACTIVE').length * 100;
 
     const activeSubscribers = subscriptions.filter((s) => s.status === 'ACTIVE').length;
@@ -610,6 +611,16 @@ export default function AdminDashboardPage() {
         <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap tabular-nums ${kind.tone}`}>
           {kind.label}
         </span>
+        {o.paymentStatus === 'PAID_ONLINE' && (
+          <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap bg-emerald-400/15 text-emerald-300">
+            Paid online
+          </span>
+        )}
+        {o.paymentStatus === 'UNPAID' && (
+          <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap bg-amber-400/15 text-amber-300">
+            Not paid
+          </span>
+        )}
         {pass && pass.active && (
           <span className="text-xs text-dim tabular-nums whitespace-nowrap">
             {pass.left} of {pass.total} left
@@ -1428,13 +1439,18 @@ export default function AdminDashboardPage() {
                                           ? `Wash pass purchased · ${amount}`
                                           : 'Paid with the wash pass'}
                                     </div>
+                                    {kind.key === 'purchase' && selectedOrder.paymentStatus === 'UNPAID' && (
+                                      <div className="text-sm text-amber-300">
+                                        Not paid yet. It turns to Paid by itself when the customer pays online.
+                                      </div>
+                                    )}
                                     {kind.key === 'single' && (
                                       <div className="text-sm text-muted">
                                         {selectedOrder.paymentStatus === 'PAID_ONLINE'
                                           ? 'Paid online (MyFatoorah). If you cancel it, refund it in MyFatoorah.'
                                           : selectedOrder.paymentStatus === 'PAID_OFFLINE'
                                             ? 'Paid'
-                                            : 'To be paid at handover'}
+                                            : 'Not paid yet. It turns to Paid by itself when the customer pays online.'}
                                       </div>
                                     )}
                                     {kind.key !== 'single' && (
