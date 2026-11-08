@@ -129,9 +129,18 @@ html.theme-switching *::after {
 
 html {
   -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* The page scrolls, but never zooms or slides sideways */
+  touch-action: pan-x pan-y;
+  overflow-x: clip;
+  overscroll-behavior-x: none;
 }
 
 body {
+  max-width: 100%;
+  overflow-x: clip;
+  min-height: 100vh;
+  min-height: 100dvh;
   background-color: var(--canvas);
   color: var(--ink-body);
   font-size: 15px;
@@ -169,11 +178,32 @@ html[dir="rtl"],
   font-variant-numeric: tabular-nums;
 }
 
+/* iPhone Safari zooms into any field smaller than 16px when it is tapped: keep every field at 16px on touch screens */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 /* Controls: one press behaviour everywhere */
 button,
 [role="button"],
-a {
+a,
+input,
+textarea,
+select,
+label,
+summary {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Media and long words never push the page wider than the screen */
+img,
+video {
+  max-width: 100%;
 }
 
 button:not(:disabled),

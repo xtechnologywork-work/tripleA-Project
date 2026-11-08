@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "@/context/auth-context";
 import { LanguageProvider } from "@/context/language-context";
 import { ThemeProvider } from "@/context/theme-context";
+import { ViewportLock } from "@/components/system/viewport-lock";
 
 const inter = Inter({
   variable: "--font-sans",
@@ -18,8 +19,14 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "TripleA", statusBarStyle: "black-translucent" },
 };
 
+// One fixed size on every phone: no zoom in or out, like an installed app
 export const viewport: Viewport = {
   themeColor: "#000000",
+  width: "device-width",
+  initialScale: 1,
+  minimumScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({
@@ -40,6 +47,7 @@ export default function RootLayout({
       <body
         className={`${inter.variable} antialiased min-h-screen bg-canvas text-ink font-sans`}
       >
+        <ViewportLock />
         <ThemeProvider>
         <AuthProvider>
           <LanguageProvider>
