@@ -8,6 +8,7 @@ import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { compressImage } from '@/lib/image';
 import { awaitingOnlinePayment } from '@/domain/analytics';
+import { initialOf } from '@/domain/names';
 import type { ActorContext } from '@/domain/status-machine';
 import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
@@ -1326,7 +1327,7 @@ function BayOrderingClientScreen() {
             >
               <div className="flex items-center gap-3.5 min-w-0">
                 <span className="w-11 h-11 rounded-full bg-raised flex items-center justify-center text-[17px] font-semibold text-ink flex-shrink-0">
-                  {(currentEmployee?.fullName || '?').trim().charAt(0).toUpperCase()}
+                  {initialOf(currentEmployee?.fullName || '')}
                 </span>
                 <div className="min-w-0">
                   <div className="text-[16px] font-semibold text-ink truncate">

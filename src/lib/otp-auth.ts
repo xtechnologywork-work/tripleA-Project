@@ -2,6 +2,7 @@
  * Shared pieces of the sign in and sign up routes. Server only.
  */
 import type { Employee } from '@/domain/types';
+import { withTitle } from '@/domain/names';
 import { findEmployeeByPhone, createEmployee } from '@/lib/supabase-sync';
 import { isServerSupabaseConfigured } from '@/lib/supabase-server';
 import { getLocalDb, mergeLocal } from '@/lib/local-db';
@@ -26,7 +27,7 @@ export async function createAccount(last8: string, fullName: string, employeeNo:
   const employee: Employee = {
     id: `emp-moci-${last8}`,
     employeeNo,
-    fullName,
+    fullName: withTitle(fullName),
     email: `moci.${last8}@moci.gov.qa`,
     phone: `+974 ${last8.slice(0, 4)} ${last8.slice(4)}`,
     company: 'Ministry of Commerce and Industry - State of Qatar',

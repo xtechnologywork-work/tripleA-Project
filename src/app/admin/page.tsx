@@ -11,6 +11,7 @@ import { QrPage } from '@/components/admin/qr-page';
 import { SafeImage } from '@/components/ui/safe-media';
 import type { DataSet } from '@/domain/analytics';
 import { awaitingOnlinePayment, reorderTimes } from '@/domain/analytics';
+import { initialOf } from '@/domain/names';
 import { TowerBays } from '@/components/admin/tower-bays';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
@@ -1781,7 +1782,7 @@ export default function AdminDashboardPage() {
                               <td className="py-3.5 px-5 cursor-pointer" onClick={() => setClientPanelId(emp.id)} title="Open client">
                                 <div className="flex items-center gap-3">
                                   <div className="w-9 h-9 rounded-full bg-raised flex items-center justify-center text-sm font-semibold text-ink flex-shrink-0">
-                                    {emp.fullName.charAt(0)}
+                                    {initialOf(emp.fullName)}
                                   </div>
                                   <div className="min-w-0">
                                     <span className="font-semibold text-ink block">{emp.fullName}</span>

@@ -20,6 +20,7 @@ import {
 } from '../../domain/types';
 import { validateInspection, requiresPreWashInspection, isCleared } from '../../domain/inspection';
 import { ActorContext, hasPermission, getAllowedTransitions, isValidStaffTransition } from '../../domain/status-machine';
+import { withTitle } from '../../domain/names';
 import { keepFreshLinks } from '@/lib/media-urls';
 
 const STORAGE_KEY = 'cb_supabase_live_v2';
@@ -1054,6 +1055,8 @@ class MockStore {
     const emp = db.employees.find((e) => e.id === employeeId);
     if (!emp) return undefined;
     Object.assign(emp, updates);
+    // The name looks the same everywhere: a member of the Al Thani family always has Sheikh in front
+    if (typeof updates.fullName === 'string') emp.fullName = withTitle(updates.fullName);
     this.saveToStorage();
     return emp;
   }

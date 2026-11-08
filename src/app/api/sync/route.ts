@@ -4,6 +4,7 @@ import { isServerSupabaseConfigured, verifyAdmin } from '@/lib/supabase-server';
 import { verifyEmployeeToken } from '@/lib/employee-session';
 import { getLocalDb, getLocalVersion, mergeLocal } from '@/lib/local-db';
 import { paymentsEnabled } from '@/lib/payments';
+import { withTitle } from '@/domain/names';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // a compressed photo plus the rows around it
 
@@ -55,8 +56,11 @@ export async function GET(req: Request) {
   }
 
   // Local demo mode (no Supabase configured): no accounts exist, so everything is returned
+  // Names show the same here as with Supabase: a member of the Al Thani family has Sheikh in front
+  const local = getLocalDb();
+  const shown = local && Array.isArray(local.employees) ? { ...local, employees: local.employees.map((e) => ({ ...e, fullName: withTitle(e.fullName) })) } : local;
   return NextResponse.json(
-    { db: getLocalDb(), version: getLocalVersion(), source: 'local', features: { inspection: true, payments: paymentsEnabled() }, timestamp: Date.now() },
+    { db: shown, version: getLocalVersion(), source: 'local', features: { inspection: true, payments: paymentsEnabled() }, timestamp: Date.now() },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }

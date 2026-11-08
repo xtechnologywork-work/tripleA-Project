@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabase, hasServiceKey } from './supabase-server';
 import { MockDatabase, TOTAL_BAYS } from '../data/mock/seed';
 import { isValidStaffTransition, isCustomerMove } from '../domain/status-machine';
+import { withTitle } from '../domain/names';
 import { validateInspection, requiresPreWashInspection } from '../domain/inspection';
 import {
   Employee,
@@ -87,7 +88,7 @@ export function mapEmployeeRow(e: Row): Employee {
   return {
     id: String(e.id),
     employeeNo: e.employee_no ? String(e.employee_no) : undefined,
-    fullName: String(e.full_name || ''),
+    fullName: withTitle(String(e.full_name || '')),
     email: e.email ? String(e.email) : '',
     phone: e.phone ? String(e.phone) : '',
     qid: e.qid ? String(e.qid) : undefined,
@@ -117,7 +118,7 @@ export async function createEmployee(employee: Employee): Promise<{ ok: boolean;
   const { error } = await sb.from('employees').insert({
     id: employee.id,
     employee_no: employee.employeeNo || null,
-    full_name: employee.fullName,
+    full_name: withTitle(employee.fullName),
     email: employee.email || null,
     phone: employee.phone || null,
     qid: employee.qid || null,
@@ -267,7 +268,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
     const employees: Employee[] = (empsRes.data || []).map((e: Row) => ({
       id: String(e.id),
       employeeNo: e.employee_no ? String(e.employee_no) : undefined,
-      fullName: String(e.full_name || ''),
+      fullName: withTitle(String(e.full_name || '')),
       email: e.email ? String(e.email) : '',
       phone: e.phone ? String(e.phone) : '',
       qid: e.qid ? String(e.qid) : undefined,
@@ -826,7 +827,7 @@ export async function applyChanges(input: SyncChanges, identity: Identity): Prom
       const rows = changes.employees.map((e) => ({
         id: e.id,
         employee_no: e.employeeNo || null,
-        full_name: e.fullName,
+        full_name: withTitle(e.fullName),
         email: e.email || null,
         phone: e.phone || null,
         qid: e.qid || null,
@@ -1167,7 +1168,8 @@ async function validateEmployeeBatch(
       const name = (e.fullName || '').trim();
       const digits = (e.phone || '').replace(/\D/g, '');
       const qid = (e.qid || '').replace(/\D/g, '');
-      if (name.length < 2 || name.length > 80) errors.push('profile: name must be 2 to 80 characters');
+      // 90, because the title Sheikh is added in front of an Al Thani name
+      if (name.length < 2 || name.length > 90) errors.push('profile: name must be 2 to 90 characters');
       if (digits.length < 8 || digits.length > 15) errors.push('profile: phone number is not valid');
       if (qid.length > 11) errors.push('profile: QID is too long');
       const current = mapEmployeeRow(myRow);
