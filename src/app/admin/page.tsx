@@ -11,6 +11,7 @@ import { QrPage } from '@/components/admin/qr-page';
 import { SafeImage } from '@/components/ui/safe-media';
 import type { DataSet } from '@/domain/analytics';
 import { awaitingOnlinePayment, reorderTimes } from '@/domain/analytics';
+import { TowerBays } from '@/components/admin/tower-bays';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
 import { isCleared } from '@/domain/inspection';
@@ -110,7 +111,6 @@ export default function AdminDashboardPage() {
     reason: '',
   });
   const [esError, setEsError] = useState('');
-  const [bayLookup, setBayLookup] = useState('');
   const [clock, setClock] = useState<number | null>(null);
   const [inspectionFlow, setInspectionFlow] = useState<{ phase: 'BEFORE' | 'AFTER'; editing: boolean } | null>(null);
   const [inspectionViewOpen, setInspectionViewOpen] = useState(false);
@@ -326,6 +326,9 @@ export default function AdminDashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const reorderedAt = useMemo(() => reorderTimes(mockStore.getDb().orderEvents), [orders, lastSyncTime]);
   const queuedAt = (o: Order) => reorderedAt.get(o.id) ?? new Date(o.createdAt).getTime();
+
+  // The tower shows real orders only: one still waiting for its online payment is not a car to pick up yet
+  const towerOrders = useMemo(() => orders.filter((o) => !awaitingOnlinePayment(o)), [orders]);
 
   // Filtered Orders for Dispatch
   const filteredOrders = useMemo(() => {
@@ -678,25 +681,6 @@ export default function AdminDashboardPage() {
       </span>
     );
   };
-
-  // Bays are plain numbers: 1 to TOTAL_BAYS
-  const ACTIVE_BAY_STATES: OrderStatus[] = ['NEW', 'ASSIGNED', 'IN_PROGRESS', 'QUALITY_CHECK'];
-  const occupiedBayCodes = Array.from(
-    new Set(
-      orders
-        .filter((o) => ACTIVE_BAY_STATES.includes(o.status) || o.status === 'RETURNED_TO_PARKING')
-        .map((o) => o.bayCodeSnapshot)
-    )
-  ).sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
-  const detailingBayCount = occupiedBayCodes.filter((c) =>
-    orders.some((o) => o.bayCodeSnapshot === c && ACTIVE_BAY_STATES.includes(o.status))
-  ).length;
-  const readyBayCount = occupiedBayCodes.length - detailingBayCount;
-  const availableBayCount = Math.max(TOTAL_BAYS - occupiedBayCodes.length, 0);
-  const lookupDigits = bayLookup.replace(/\D/g, '');
-  const lookupNumber = Number(lookupDigits);
-  const lookupValid = lookupDigits !== '' && lookupNumber >= 1 && lookupNumber <= TOTAL_BAYS;
-  const visibleBayCodes = lookupDigits === '' ? occupiedBayCodes : lookupValid ? [String(lookupNumber)] : [];
 
   // Shared surface tokens for the console
   const card = 'rounded-3xl bg-tile';
@@ -1095,7 +1079,7 @@ export default function AdminDashboardPage() {
         {/* Key numbers */}
         <div
           className={`flex-shrink-0 px-4 md:px-8 pb-4 md:pb-5 gap-3 ${
-            activeTab === 'INSIGHTS' || activeTab === 'QR'
+            activeTab === 'INSIGHTS' || activeTab === 'QR' || activeTab === 'BAYS'
               ? 'hidden'
               : mobileDetail && activeTab === 'DISPATCH'
               ? 'hidden min-[1360px]:grid min-[1360px]:grid-cols-6'
@@ -1979,111 +1963,16 @@ export default function AdminDashboardPage() {
           {/* ================================================================== */}
           {activeTab === 'BAYS' && (
             <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
-              <div className="max-w-[1200px] space-y-4">
-                <div className={`${card} p-4 md:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5`}>
-                  <div>
-                    <h3 className="text-base font-semibold text-ink tracking-tight">
-                      Lusail Tower Parking Bays (1 to {TOTAL_BAYS.toLocaleString()})
-                    </h3>
-                    <p className="text-sm text-dim mt-1">Click any active bay to inspect detailing progress</p>
-                  </div>
-
-                  <div className="flex items-center gap-6 text-sm text-body flex-wrap">
-                    <span className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400" /> Available
-                      <strong className="text-ink tabular-nums">{availableBayCount.toLocaleString()}</strong>
-                    </span>
-                    <span className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-amber-400" /> Detailing
-                      <strong className="text-ink tabular-nums">{detailingBayCount}</strong>
-                    </span>
-                    <span className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-[#2997ff]" /> Ready
-                      <strong className="text-ink tabular-nums">{readyBayCount}</strong>
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 max-w-[360px] bg-tile rounded-full px-4 py-2.5">
-                  <Search className="h-4 w-4 text-dim flex-shrink-0" />
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={4}
-                    placeholder={`Find a bay (1 to ${TOTAL_BAYS})`}
-                    value={bayLookup}
-                    onChange={(e) => setBayLookup(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    className="w-full bg-transparent text-sm text-ink placeholder-dim outline-none tabular-nums"
-                  />
-                  {bayLookup && (
-                    <button onClick={() => setBayLookup('')} className="text-dim hover:text-ink" aria-label="Clear bay search">
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-
-                {visibleBayCodes.length === 0 ? (
-                  <div className={`${card} p-10 text-center text-sm text-dim`}>
-                    {lookupDigits !== '' && !lookupValid
-                      ? `Bay number must be between 1 and ${TOTAL_BAYS.toLocaleString()}.`
-                      : `No bays are in use right now. All ${TOTAL_BAYS.toLocaleString()} bays are available.`}
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-3">
-                    {visibleBayCodes.map((code) => {
-                      const activeBayOrder = orders.find(
-                        (o) => o.bayCodeSnapshot === code && ACTIVE_BAY_STATES.includes(o.status)
-                      );
-                      const returnedOrder = orders.find(
-                        (o) => (o.returnConfirmation?.bayCode || o.bayCodeSnapshot) === code && o.status === 'RETURNED_TO_PARKING'
-                      );
-
-                      const tone = activeBayOrder
-                        ? 'bg-amber-400/[0.1]'
-                        : returnedOrder
-                        ? 'bg-[#2997ff]/[0.12]'
-                        : 'bg-tile';
-                      const dot = activeBayOrder ? 'bg-amber-400' : returnedOrder ? 'bg-[#2997ff]' : 'bg-emerald-400';
-
-                      return (
-                        <div
-                          key={code}
-                          onClick={() => {
-                            if (activeBayOrder) {
-                              openOrder(activeBayOrder.id);
-                              setActiveTab('DISPATCH');
-                            }
-                          }}
-                          className={`rounded-3xl p-5 space-y-6 transition ${tone} ${
-                            activeBayOrder ? 'cursor-pointer hover:brightness-125' : ''
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="tabular-nums text-lg font-semibold text-ink">{code}</span>
-                            <span className={`w-2 h-2 rounded-full ${dot}`} />
-                          </div>
-
-                          <div className="text-sm">
-                            {activeBayOrder ? (
-                              <div className="space-y-0.5">
-                                <span className="text-amber-300 font-semibold block tabular-nums">{activeBayOrder.vehicleSnapshot.plateNumber}</span>
-                                <span className="text-xs text-muted block">{activeBayOrder.status}</span>
-                              </div>
-                            ) : returnedOrder ? (
-                              <div className="space-y-0.5">
-                                <span className="text-link-soft font-semibold block tabular-nums">{returnedOrder.vehicleSnapshot.plateNumber}</span>
-                                <span className="text-xs text-muted block">Ready in Bay</span>
-                              </div>
-                            ) : (
-                              <span className="text-emerald-300">Available</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              <TowerBays
+                orders={towerOrders}
+                employees={employees}
+                reorderedAt={reorderedAt}
+                now={clock}
+                onOpen={(id) => {
+                  openOrder(id);
+                  setActiveTab('DISPATCH');
+                }}
+              />
             </div>
           )}
 
