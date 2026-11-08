@@ -2,12 +2,11 @@ import { NextResponse } from 'next/server';
 import { verifyEmployeeToken } from '@/lib/employee-session';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
 import { myFatoorahConfig, createPaymentPage } from '@/lib/myfatoorah';
-import { paymentsEnabled, savePayment, createUnpaidOrder } from '@/lib/payments';
-import { fetchSupabaseState, storePaymentPhoto } from '@/lib/supabase-sync';
+import { paymentsEnabled, savePayment, createUnpaidOrder, loadForPayment } from '@/lib/payments';
+import { storePaymentPhoto } from '@/lib/supabase-sync';
 import { isServerSupabaseConfigured } from '@/lib/supabase-server';
-import { getLocalDb } from '@/lib/local-db';
 import { cleanDraft, pickPackage, pickService, priceFor, type PayPlan, type PaymentIntent } from '@/domain/payments';
-import { TOTAL_BAYS, type MockDatabase } from '@/data/mock/seed';
+import { TOTAL_BAYS } from '@/data/mock/seed';
 
 const fail = (error: string, status = 400) => NextResponse.json({ error }, { status });
 
@@ -42,52 +41,53 @@ export async function POST(req: Request) {
   const cleaned = cleanDraft(body, TOTAL_BAYS);
   if (!cleaned.ok) return fail(cleaned.error);
 
-  const db: MockDatabase | null = isServerSupabaseConfigured()
-    ? (await fetchSupabaseState())?.db || null
-    : ((getLocalDb() as unknown as MockDatabase) || null);
-  if (!db) return fail('NOT_READY', 503);
-
-  const employee = (db.employees || []).find((e) => e.id === employeeId);
-  if (!employee || employee.status === 'SUSPENDED') return fail('SIGN_IN', 401);
-  if (plan === 'pass' && (db.subscriptions || []).some((s) => s.employeeId === employeeId && s.status === 'ACTIVE')) {
-    return fail('HAS_PASS', 409);
-  }
-
-  // The price always comes from the saved prices, never from the browser
-  const amountMinor = priceFor(plan, pickService(db.services || []), pickPackage(db.packages || []));
-  if (!amountMinor || amountMinor <= 0) return fail('NOT_READY', 503);
-
   const id = crypto.randomUUID();
   const draft = cleaned.draft;
 
-  // The photo waits in private storage, not in the payment record
-  if (draft.photo && isServerSupabaseConfigured()) {
-    const stored = await storePaymentPhoto(id, draft.photo);
-    draft.photo = stored || undefined;
-  }
+  // The photo goes to private storage while the small reads run, so neither waits for the other.
+  // (The photo waits in storage, not in the payment record.)
+  const [data, storedPhoto] = await Promise.all([
+    loadForPayment(employeeId),
+    draft.photo && isServerSupabaseConfigured() ? storePaymentPhoto(id, draft.photo) : Promise.resolve(null),
+  ]);
+  if (!data) return fail('NOT_READY', 503);
+  if (draft.photo && isServerSupabaseConfigured()) draft.photo = storedPhoto || undefined;
+
+  const employee = data.employee;
+  if (!employee || employee.status === 'SUSPENDED') return fail('SIGN_IN', 401);
+  if (plan === 'pass' && data.activeSubscriptions.length > 0) return fail('HAS_PASS', 409);
+
+  // The price always comes from the saved prices, never from the browser
+  const amountMinor = priceFor(plan, pickService(data.services), pickPackage(data.packages));
+  if (!amountMinor || amountMinor <= 0) return fail('NOT_READY', 503);
 
   const intent: PaymentIntent = { id, employeeId, plan, amountMinor, currency: 'QAR', status: 'PENDING', draft, createdAt: new Date().toISOString() };
-  if (!(await savePayment(intent))) return fail('NOT_READY', 503);
 
+  // Saving the payment and asking MyFatoorah for the page do not depend on each other: do both at once
   const config = myFatoorahConfig()!;
   const phone = (employee.phone || '').replace(/\D/g, '').slice(-8);
-  const page = await createPaymentPage(config, {
-    amount: amountMinor / 100,
-    reference: id,
-    customerName: employee.fullName,
-    mobile: phone,
-    itemName: plan === 'pass' ? 'TripleA wash pass, 8 washes' : 'TripleA car wash',
-    callbackUrl: `${siteUrl(req)}/pay/return`,
-    lang: draft.lang,
-    userField: employeeId,
-  });
+  const [saved, page] = await Promise.all([
+    savePayment(intent),
+    createPaymentPage(config, {
+      amount: amountMinor / 100,
+      reference: id,
+      customerName: employee.fullName,
+      mobile: phone,
+      itemName: plan === 'pass' ? 'TripleA wash pass, 8 washes' : 'TripleA car wash',
+      callbackUrl: `${siteUrl(req)}/pay/return`,
+      lang: draft.lang,
+      userField: employeeId,
+    }),
+  ]);
+  if (!saved) return fail('NOT_READY', 503);
   if (!page.ok) {
     console.error('MyFatoorah payment page failed:', page.error);
     await savePayment({ ...intent, status: 'FAILED' });
     return fail('GATEWAY', 502);
   }
-  // The team sees the order right away, marked not paid; it turns paid when MyFatoorah confirms
-  const made = await createUnpaidOrder(intent);
-  await savePayment({ ...intent, invoiceId: page.page.invoiceId, orderId: made?.id, orderReference: made?.reference });
+
+  // The team sees the order right away, marked not paid; it turns paid when MyFatoorah confirms.
+  // The order and the invoice number are saved at the same time.
+  await Promise.all([createUnpaidOrder(intent, data), savePayment({ ...intent, invoiceId: page.page.invoiceId })]);
   return NextResponse.json({ url: page.page.url, paymentRef: id });
 }

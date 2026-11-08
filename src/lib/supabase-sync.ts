@@ -141,6 +141,85 @@ export async function isInspectionReady(sb: SupabaseClient): Promise<boolean> {
 // -----------------------------------------------------------------------------
 // READ: the whole operational state, assembled from the tables
 // -----------------------------------------------------------------------------
+const mapServiceRow = (s: Row): Service => ({
+  id: String(s.id),
+  name: String(s.name || ''),
+  description: String(s.description || ''),
+  durationMin: Number(s.duration_min || 35),
+  price: { amountMinor: Number(s.price_minor || 2000), currency: 'QAR' },
+  creditCost: Number(s.credit_cost || 1),
+  active: Boolean(s.active ?? true),
+  sortOrder: Number(s.sort_order || 1),
+});
+
+const mapPackageRow = (p: Row): SubscriptionPackage => ({
+  id: String(p.id),
+  name: String(p.name || ''),
+  paidWashes: Number(p.paid_washes || 6),
+  bonusWashes: Number(p.bonus_washes || 2),
+  price: { amountMinor: Number(p.price_minor || 14000), currency: 'QAR' },
+  validityDays: Number(p.validity_days || 60),
+  eligibleServiceIds: (p.eligible_service_ids as string[]) || ['srv-exterior'],
+  active: Boolean(p.active ?? true),
+});
+
+const mapSubscriptionRow = (sub: Row): EmployeeSubscription => ({
+  id: String(sub.id),
+  employeeId: String(sub.employee_id),
+  packageId: String(sub.package_id),
+  packageSnapshot: sub.package_snapshot as SubscriptionPackage,
+  status: (sub.status || 'ACTIVE') as EmployeeSubscription['status'],
+  activatedAt: String(sub.activated_at || new Date().toISOString()),
+  expiresAt: sub.expires_at ? String(sub.expires_at) : undefined,
+  activatedBy: sub.activated_by ? String(sub.activated_by) : undefined,
+});
+
+/**
+ * What paying needs, and nothing more: one employee, the prices, their active pass, and one order by id.
+ * Much lighter than reading the whole database (paying must feel quick). Null when the data cannot be read.
+ */
+export async function fetchPaymentContext(
+  employeeId: string,
+  orderId?: string
+): Promise<{
+  employee: Employee | null;
+  services: Service[];
+  packages: SubscriptionPackage[];
+  activeSubscriptions: EmployeeSubscription[];
+  existingOrder: { id: string; reference: string; status: OrderStatus; paymentStatus: Order['paymentStatus'] } | null;
+} | null> {
+  const sb = getServerSupabase();
+  if (!sb) return null;
+  try {
+    const [empRes, srvRes, pkgRes, subRes, ordRes] = await Promise.all([
+      sb.from('employees').select('*').eq('id', employeeId).limit(1),
+      sb.from('services').select('*'),
+      sb.from('subscription_packages').select('*'),
+      sb.from('employee_subscriptions').select('*').eq('employee_id', employeeId).eq('status', 'ACTIVE'),
+      orderId ? sb.from('orders').select('id,reference,status,payment_status').eq('id', orderId).limit(1) : Promise.resolve({ data: [] as Row[], error: null }),
+    ]);
+    if (empRes.error || srvRes.error || pkgRes.error || subRes.error || ordRes.error) return null;
+    const o = (ordRes.data || [])[0] as Row | undefined;
+    return {
+      employee: empRes.data && empRes.data[0] ? mapEmployeeRow(empRes.data[0] as Row) : null,
+      services: (srvRes.data || []).map(mapServiceRow),
+      packages: (pkgRes.data || []).map(mapPackageRow),
+      activeSubscriptions: (subRes.data || []).map(mapSubscriptionRow),
+      existingOrder: o
+        ? {
+            id: String(o.id),
+            reference: String(o.reference),
+            status: String(o.status) as OrderStatus,
+            paymentStatus: String(o.payment_status || 'NOT_APPLICABLE') as Order['paymentStatus'],
+          }
+        : null,
+    };
+  } catch (err) {
+    console.error('Reading the payment data failed:', err);
+    return null;
+  }
+}
+
 export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version: number; inspectionEnabled: boolean } | null> {
   const sb = getServerSupabase();
   if (!sb) return null;
@@ -235,38 +314,9 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       updatedAt: String(o.updated_at || new Date().toISOString()),
     }));
 
-    const services: Service[] = (srvsRes.data || []).map((s: Row) => ({
-      id: String(s.id),
-      name: String(s.name || ''),
-      description: String(s.description || ''),
-      durationMin: Number(s.duration_min || 35),
-      price: { amountMinor: Number(s.price_minor || 2000), currency: 'QAR' },
-      creditCost: Number(s.credit_cost || 1),
-      active: Boolean(s.active ?? true),
-      sortOrder: Number(s.sort_order || 1),
-    }));
-
-    const packages: SubscriptionPackage[] = (pkgsRes.data || []).map((p: Row) => ({
-      id: String(p.id),
-      name: String(p.name || ''),
-      paidWashes: Number(p.paid_washes || 6),
-      bonusWashes: Number(p.bonus_washes || 2),
-      price: { amountMinor: Number(p.price_minor || 14000), currency: 'QAR' },
-      validityDays: Number(p.validity_days || 60),
-      eligibleServiceIds: (p.eligible_service_ids as string[]) || ['srv-exterior'],
-      active: Boolean(p.active ?? true),
-    }));
-
-    const subscriptions: EmployeeSubscription[] = (subsRes.data || []).map((sub: Row) => ({
-      id: String(sub.id),
-      employeeId: String(sub.employee_id),
-      packageId: String(sub.package_id),
-      packageSnapshot: sub.package_snapshot as SubscriptionPackage,
-      status: (sub.status || 'ACTIVE') as EmployeeSubscription['status'],
-      activatedAt: String(sub.activated_at || new Date().toISOString()),
-      expiresAt: sub.expires_at ? String(sub.expires_at) : undefined,
-      activatedBy: sub.activated_by ? String(sub.activated_by) : undefined,
-    }));
+    const services: Service[] = (srvsRes.data || []).map(mapServiceRow);
+    const packages: SubscriptionPackage[] = (pkgsRes.data || []).map(mapPackageRow);
+    const subscriptions: EmployeeSubscription[] = (subsRes.data || []).map(mapSubscriptionRow);
 
     const credits: CreditLedgerEntry[] = (creditsRes.data || []).map((c: Row) => {
       const details = (c.details as Record<string, unknown> | null) || {};
@@ -520,13 +570,17 @@ export async function nextReference(sb: SupabaseClient, createdAt: string): Prom
   return `${prefix}-${String((Number.isFinite(last) ? last : 0) + 1).padStart(4, '0')}`;
 }
 
+let photoBucketReady = false;
+
 async function ensurePhotoBucket(sb: SupabaseClient): Promise<boolean> {
   if (!hasServiceKey()) return false;
+  if (photoBucketReady) return true; // asked once per server start, not for every photo
   const { error } = await sb.storage.createBucket(PHOTO_BUCKET, { public: false });
   if (error && !/already exists/i.test(error.message)) {
     console.warn('Photo bucket unavailable:', error.message);
     return false;
   }
+  photoBucketReady = true;
   return true;
 }
 

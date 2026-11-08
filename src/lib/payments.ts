@@ -3,7 +3,7 @@
  * Kept in Supabase (table "payments"), or in the local file in demo mode. Server only.
  */
 import { getServerSupabase, isServerSupabaseConfigured } from '@/lib/supabase-server';
-import { applyChanges, fetchSupabaseState, nextReference } from '@/lib/supabase-sync';
+import { applyChanges, fetchPaymentContext, fetchSupabaseState, nextReference } from '@/lib/supabase-sync';
 import { getLocalDb, mergeLocal } from '@/lib/local-db';
 import { myFatoorahConfig, checkPayment } from '@/lib/myfatoorah';
 import {
@@ -15,7 +15,7 @@ import {
   type PaymentStatus,
 } from '@/domain/payments';
 import type { MockDatabase } from '@/data/mock/seed';
-import type { CreditLedgerEntry, EmployeeSubscription } from '@/domain/types';
+import type { CreditLedgerEntry, Employee, EmployeeSubscription, Order, OrderStatus, Service, SubscriptionPackage } from '@/domain/types';
 
 /** Online payment is on when PAYMENTS_ENABLED is "true" and MyFatoorah is set up. */
 export const paymentsEnabled = () => process.env.PAYMENTS_ENABLED === 'true' && !!myFatoorahConfig();
@@ -109,10 +109,37 @@ async function loadState(): Promise<MockDatabase | null> {
   return (getLocalDb() as unknown as MockDatabase) || null;
 }
 
-async function makeReference(db: MockDatabase, createdAt: string): Promise<string> {
+/** What paying needs: one employee, the prices, their active pass, and one order by id. */
+export interface PayData {
+  employee: Employee | null;
+  services: Service[];
+  packages: SubscriptionPackage[];
+  activeSubscriptions: EmployeeSubscription[];
+  existingOrder: { id: string; reference: string; status: OrderStatus; paymentStatus: Order['paymentStatus'] } | null;
+  /** The whole local data, only in the demo without Supabase */
+  localDb?: MockDatabase;
+}
+
+/** Reads only what is needed (on Supabase, a few small queries instead of the whole database). */
+export async function loadForPayment(employeeId: string, orderId?: string): Promise<PayData | null> {
+  if (onSupabase()) return fetchPaymentContext(employeeId, orderId);
+  const db = await loadState();
+  if (!db) return null;
+  const existing = orderId ? (db.orders || []).find((o) => o.id === orderId) : undefined;
+  return {
+    employee: (db.employees || []).find((e) => e.id === employeeId) || null,
+    services: db.services || [],
+    packages: db.packages || [],
+    activeSubscriptions: (db.subscriptions || []).filter((x) => x.employeeId === employeeId && x.status === 'ACTIVE'),
+    existingOrder: existing ? { id: existing.id, reference: existing.reference, status: existing.status, paymentStatus: existing.paymentStatus } : null,
+    localDb: db,
+  };
+}
+
+async function makeReference(db: MockDatabase | null, createdAt: string): Promise<string> {
   if (onSupabase()) return nextReference(getServerSupabase()!, createdAt);
   const prefix = `CB-${createdAt.substring(2, 4)}${createdAt.substring(5, 7)}${createdAt.substring(8, 10)}`;
-  const last = (db.orders || [])
+  const last = ((db?.orders as Order[] | undefined) || [])
     .filter((o) => o.reference.startsWith(`${prefix}-`))
     .reduce((max, o) => Math.max(max, parseInt(o.reference.split('-').pop() || '0', 10) || 0), 0);
   return `${prefix}-${String(last + 1).padStart(4, '0')}`;
@@ -180,21 +207,21 @@ export async function confirmPayment(key: string, keyType: 'PaymentId' | 'Invoic
 /**
  * Makes the order when the customer reaches the payment page, marked "not paid" (so the team sees it even if
  * the customer never pays). Same ids as the paid order, so it is made only once.
+ * `data` is what the caller already read, so nothing is read twice.
  */
-export async function createUnpaidOrder(intent: PaymentIntent): Promise<{ id: string; reference: string } | null> {
+export async function createUnpaidOrder(intent: PaymentIntent, data?: PayData): Promise<{ id: string; reference: string } | null> {
   try {
-    const db = await loadState();
-    if (!db) return null;
     const ids = fulfillmentIds(intent.id);
-    const existing = (db.orders || []).find((o) => o.id === ids.order);
-    if (existing) return { id: existing.id, reference: existing.reference };
-    const employee = (db.employees || []).find((e) => e.id === intent.employeeId);
-    const service = pickService(db.services || []);
+    const d = data ?? (await loadForPayment(intent.employeeId, ids.order));
+    if (!d) return null;
+    if (!data && d.existingOrder) return { id: d.existingOrder.id, reference: d.existingOrder.reference };
+    const employee = d.employee;
+    const service = pickService(d.services);
     if (!employee || !service) return null;
 
     const now = new Date().toISOString();
-    let reference = await makeReference(db, now);
-    const f = buildFulfillment({ intent, employee, service, pkg: pickPackage(db.packages || []), activePass: null, reference, now, paid: false });
+    let reference = await makeReference(d.localDb ?? null, now);
+    const f = buildFulfillment({ intent, employee, service, pkg: pickPackage(d.packages), activePass: null, reference, now, paid: false });
     if (onSupabase()) {
       const result = await applyChanges({ orders: [f.order], orderEvents: f.events, photos: f.photos }, { admin: true });
       if (!result.ok || result.rejected.length) {
@@ -214,24 +241,23 @@ export async function createUnpaidOrder(intent: PaymentIntent): Promise<{ id: st
 
 /** Makes the order (and the pass) for a paid payment. The ids come from the payment, so it never doubles. */
 async function fulfill(intent: PaymentIntent): Promise<string> {
-  const db = await loadState();
-  if (!db) throw new Error('No data');
   const ids = fulfillmentIds(intent.id);
+  const d = await loadForPayment(intent.employeeId, ids.order);
+  if (!d) throw new Error('No data');
 
   // The order was made when the customer reached the payment page: now it becomes paid
-  const existing = (db.orders || []).find((o) => o.id === ids.order);
+  const existing = d.existingOrder;
   if (existing) {
     if (existing.paymentStatus !== 'PAID_ONLINE') {
-      const employee = (db.employees || []).find((e) => e.id === intent.employeeId);
-      const service = pickService(db.services || []);
+      const employee = d.employee;
+      const service = pickService(d.services);
       const cancelled = existing.status === 'CANCELLED';
       let credits: CreditLedgerEntry[] = [];
       let subscriptions: EmployeeSubscription[] = [];
       if (intent.plan === 'pass' && employee && service) {
-        const activePass =
-          (db.subscriptions || []).find((s) => s.employeeId === employee.id && s.status === 'ACTIVE' && s.id !== ids.subscription) || null;
+        const activePass = d.activeSubscriptions.find((x) => x.employeeId === employee.id && x.id !== ids.subscription) || null;
         const f = buildFulfillment({
-          intent, employee, service, pkg: pickPackage(db.packages || []), activePass, reference: existing.reference, now: new Date().toISOString(),
+          intent, employee, service, pkg: pickPackage(d.packages), activePass, reference: existing.reference, now: new Date().toISOString(),
         });
         subscriptions = f.subscriptions;
         // A wash the team already cancelled does not use a wash of the new pass
@@ -251,8 +277,9 @@ async function fulfill(intent: PaymentIntent): Promise<string> {
           .eq('id', existing.id);
         if (error) throw new Error(error.message);
       } else {
+        const full = (d.localDb?.orders || []).find((o) => o.id === existing.id);
         mergeLocal({
-          orders: [{ ...existing, paymentStatus: 'PAID_ONLINE', creditsUsed: usesCredit ? 1 : 0, updatedAt: new Date().toISOString() }],
+          orders: full ? [{ ...full, paymentStatus: 'PAID_ONLINE', creditsUsed: usesCredit ? 1 : 0, updatedAt: new Date().toISOString() }] : [],
           credits,
           subscriptions,
         });
@@ -262,15 +289,14 @@ async function fulfill(intent: PaymentIntent): Promise<string> {
     return existing.reference;
   }
 
-  const employee = (db.employees || []).find((e) => e.id === intent.employeeId);
-  const service = pickService(db.services || []);
+  const employee = d.employee;
+  const service = pickService(d.services);
   if (!employee || !service) throw new Error('Employee or service missing');
-  const activePass =
-    (db.subscriptions || []).find((s) => s.employeeId === employee.id && s.status === 'ACTIVE' && s.id !== ids.subscription) || null;
+  const activePass = d.activeSubscriptions.find((x) => x.employeeId === employee.id && x.id !== ids.subscription) || null;
 
   const now = new Date().toISOString();
-  let reference = await makeReference(db, now);
-  const f = buildFulfillment({ intent, employee, service, pkg: pickPackage(db.packages || []), activePass, reference, now });
+  let reference = await makeReference(d.localDb ?? null, now);
+  const f = buildFulfillment({ intent, employee, service, pkg: pickPackage(d.packages), activePass, reference, now });
 
   if (onSupabase()) {
     const result = await applyChanges(
