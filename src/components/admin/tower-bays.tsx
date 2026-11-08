@@ -35,15 +35,30 @@ function vehicleLine(o: Order): string {
   return car || plateLabel(v.plateNumber, 'en');
 }
 
-function Place({ c, now, tone, name, onOpen }: { c: BayCard; now: number | null; tone: 'amber' | 'blue' | 'violet'; name: string; onOpen: () => void }) {
+function Place({
+  c,
+  now,
+  tone,
+  name,
+  onOpen,
+  onCollected,
+}: {
+  c: BayCard;
+  now: number | null;
+  tone: 'amber' | 'blue' | 'violet';
+  name: string;
+  onOpen: () => void;
+  onCollected?: () => void;
+}) {
   const toneCls = tone === 'amber' ? 'bg-amber-400/10' : tone === 'blue' ? 'bg-[#2997ff]/12' : 'bg-fill';
   const dot = tone === 'amber' ? 'bg-amber-400' : tone === 'blue' ? 'bg-[#2997ff]' : 'bg-violet-400';
   const since = waited(now, c.since);
   return (
+    <div className={`rounded-3xl flex flex-col ${toneCls}`}>
     <button
       type="button"
       onClick={onOpen}
-      className={`text-start rounded-3xl p-4 md:p-5 space-y-4 transition hover:brightness-125 active:scale-[0.99] cursor-pointer ${toneCls}`}
+      className="text-start p-4 md:p-5 space-y-4 transition hover:brightness-125 active:scale-[0.99] cursor-pointer flex-1 rounded-3xl"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -65,10 +80,36 @@ function Place({ c, now, tone, name, onOpen }: { c: BayCard; now: number | null;
       {c.conflict && (
         <div className="flex items-center gap-1.5 text-xs text-amber-300">
           <TriangleAlert className="h-3.5 w-3.5 flex-shrink-0" />
-          <span>Another car is on this bay number</span>
+          <span>Two cars on this bay number: check the number</span>
+        </div>
+      )}
+      {c.washedHere && (
+        <div className="flex items-start gap-1.5 text-xs text-amber-300">
+          <TriangleAlert className="h-3.5 w-3.5 flex-shrink-0 mt-px" />
+          <span>A washed car is still marked on this bay. Check it was collected.</span>
+        </div>
+      )}
+      {c.probablyGone && (
+        <div className="flex items-start gap-1.5 text-xs text-amber-300">
+          <TriangleAlert className="h-3.5 w-3.5 flex-shrink-0 mt-px" />
+          <span>A new car is waiting on this bay, so this one was probably collected.</span>
         </div>
       )}
     </button>
+    {onCollected && (
+      <div className="px-4 md:px-5 pb-4 md:pb-5 -mt-1">
+        <button
+          type="button"
+          onClick={onCollected}
+          className={`w-full py-2 rounded-full text-sm transition active:scale-95 cursor-pointer ${
+            c.probablyGone ? 'bg-amber-400 text-black font-semibold hover:bg-amber-300' : 'bg-fill hover:bg-fill-strong text-body hover:text-ink'
+          }`}
+        >
+          Mark as collected
+        </button>
+      </div>
+    )}
+    </div>
   );
 }
 
@@ -96,17 +137,22 @@ export function TowerBays({
   orders,
   employees,
   reorderedAt,
+  collected,
   now,
   onOpen,
+  onCollected,
 }: {
   orders: Order[];
   employees: Employee[];
   reorderedAt: Map<string, number>;
+  /** Ready cars the team already marked as collected */
+  collected: Set<string>;
   now: number | null;
   onOpen: (orderId: string) => void;
+  onCollected: (orderId: string) => void;
 }) {
   const [query, setQuery] = useState('');
-  const board = useMemo(() => buildTowerBoard(orders, reorderedAt, now ?? 0), [orders, reorderedAt, now]);
+  const board = useMemo(() => buildTowerBoard(orders, reorderedAt, now ?? 0, collected), [orders, reorderedAt, now, collected]);
   // The clock starts a moment after the page opens: wait for it, so old ready cars never flash on screen
   if (now === null) return <div className="h-40" aria-hidden />;
   const nameOf = (o: Order) => employees.find((e) => e.id === o.employeeId)?.fullName || 'Ministry staff';
@@ -217,7 +263,15 @@ export function TowerBays({
             empty={q ? 'Nothing here for this search.' : 'No washed car is waiting for its owner.'}
           >
             {ready.map((c) => (
-              <Place key={c.order.id} c={c} now={now} tone="blue" name={nameOf(c.order)} onOpen={() => onOpen(c.order.id)} />
+              <Place
+                key={c.order.id}
+                c={c}
+                now={now}
+                tone="blue"
+                name={nameOf(c.order)}
+                onOpen={() => onOpen(c.order.id)}
+                onCollected={() => onCollected(c.order.id)}
+              />
             ))}
           </Section>
         </>

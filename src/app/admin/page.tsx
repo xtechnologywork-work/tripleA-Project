@@ -330,6 +330,22 @@ export default function AdminDashboardPage() {
   // The tower shows real orders only: one still waiting for its online payment is not a car to pick up yet
   const towerOrders = useMemo(() => orders.filter((o) => !awaitingOnlinePayment(o)), [orders]);
 
+  // Washed cars the team already saw the owner take
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const collectedIds = useMemo(() => new Set(mockStore.getDb().orderEvents.filter((e) => e.type === 'COLLECTED').map((e) => e.orderId)), [orders, lastSyncTime]);
+  const handleCollected = (orderId: string) => {
+    try {
+      mockStore.markCollected(
+        orderId,
+        { type: 'STAFF', id: 'usr_ops_lead', name: adminEmail || 'Tower Operations Dispatcher', email: adminEmail || 'ops@triplea.qa', role: 'SUPERADMIN' }
+      );
+      showToast('Marked as collected');
+      reloadData();
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Could not mark it as collected');
+    }
+  };
+
   // Filtered Orders for Dispatch
   const filteredOrders = useMemo(() => {
     const list = orders.filter((o) => {
@@ -1640,12 +1656,15 @@ export default function AdminDashboardPage() {
                           {selectedOrderEvents.map((ev) => {
                             const delayed = ev.type === 'DELAYED';
                             const reordered = ev.type === 'REORDERED';
+                            const collected = ev.type === 'COLLECTED';
                             const bay = typeof ev.payload?.bay === 'string' ? ev.payload.bay : '';
                             return (
                               <li key={ev.id} className="flex items-center gap-3 text-sm">
                                 <span className={`w-2 h-2 rounded-full flex-shrink-0 ${delayed || reordered ? 'bg-orange-400' : 'bg-[#2997ff]'}`} />
                                 <span className="flex-1 text-muted min-w-0">
-                                  {delayed ? (
+                                  {collected ? (
+                                    <strong className="text-emerald-300 font-semibold">Owner collected the car</strong>
+                                  ) : delayed ? (
                                     <>
                                       <strong className="text-orange-300 font-semibold">Customer postponed the order</strong>
                                       {ev.from ? ` (it was ${ev.from})` : ''}
@@ -1967,11 +1986,13 @@ export default function AdminDashboardPage() {
                 orders={towerOrders}
                 employees={employees}
                 reorderedAt={reorderedAt}
+                collected={collectedIds}
                 now={clock}
                 onOpen={(id) => {
                   openOrder(id);
                   setActiveTab('DISPATCH');
                 }}
+                onCollected={handleCollected}
               />
             </div>
           )}

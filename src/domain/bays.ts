@@ -21,6 +21,10 @@ export interface BayCard {
   since: number;
   /** Another car is on the same bay number */
   conflict: boolean;
+  /** A ready car: a newer car is waiting on this very bay number, so this one was probably collected */
+  probablyGone?: boolean;
+  /** A waiting car: a washed car is still marked as left on this bay number */
+  washedHere?: boolean;
 }
 
 export interface TowerBoard {
@@ -49,7 +53,10 @@ function markConflicts(cards: BayCard[], keyOf: (c: BayCard) => string): BayCard
   return cards.map((c) => ({ ...c, conflict: (count.get(keyOf(c)) || 0) > 1 }));
 }
 
-export function buildTowerBoard(orders: Order[], reorderedAt: Map<string, number>, now: number): TowerBoard {
+/**
+ * @param collected ids of ready cars the team already marked as collected by their owner
+ */
+export function buildTowerBoard(orders: Order[], reorderedAt: Map<string, number>, now: number, collected: Set<string> = new Set()): TowerBoard {
   const toPickUp: BayCard[] = [];
   const withTeam: BayCard[] = [];
   const ready: BayCard[] = [];
@@ -69,6 +76,7 @@ export function buildTowerBoard(orders: Order[], reorderedAt: Map<string, number
         withTeam.push({ order: o, bay: o.bayCodeSnapshot, since: time(o.updatedAt), conflict: false });
         break;
       case 'RETURNED_TO_PARKING': {
+        if (collected.has(o.id)) break; // the owner took it
         const r = o.returnConfirmation;
         const since = time(r?.confirmedAt) || time(o.updatedAt);
         if (now - since > READY_WINDOW_MS) break;
@@ -83,12 +91,26 @@ export function buildTowerBoard(orders: Order[], reorderedAt: Map<string, number
     }
   }
 
-  return {
-    toPickUp: markConflicts(toPickUp.sort((a, b) => a.since - b.since), (c) => c.bay),
-    withTeam: withTeam.sort((a, b) => a.since - b.since),
-    ready: markConflicts(ready.sort((a, b) => b.since - a.since), (c) => `${c.floor || ''}|${c.bay}`),
-    postponed,
-  };
+  const waiting = markConflicts(toPickUp.sort((a, b) => a.since - b.since), (c) => c.bay);
+  const washed = markConflicts(ready.sort((a, b) => b.since - a.since), (c) => `${c.floor || ''}|${c.bay}`);
+
+  // A bay holds one car. A washed car and a waiting car on the same bay number cannot both be there:
+  //  - the waiting car came later: someone parked a new car there, so the washed one was probably collected
+  //  - the waiting car was there first: one of the two bay numbers is wrong
+  for (const w of waiting) {
+    for (const r of washed) {
+      if (Number(w.bay) !== Number(r.bay)) continue;
+      if (w.since > r.since) {
+        r.probablyGone = true;
+        w.washedHere = true;
+      } else {
+        r.conflict = true;
+        w.conflict = true;
+      }
+    }
+  }
+
+  return { toPickUp: waiting, withTeam: withTeam.sort((a, b) => a.since - b.since), ready: washed, postponed };
 }
 
 /** What is at one bay number right now (a car waiting there, and/or a ready car left there). */

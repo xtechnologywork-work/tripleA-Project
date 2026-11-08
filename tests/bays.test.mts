@@ -74,3 +74,35 @@ test('a bay number answers what is there', () => {
   assert.equal(f.ready.length, 1);
   assert.deepEqual(findBay(b, 700), { waiting: [], ready: [] });
 });
+
+test('a new car waiting on a bay where a washed car was left: the washed one is probably collected', () => {
+  const washed = returned('1232', 'B3', 120);
+  const fresh = order({ bayCodeSnapshot: '1232', createdAt: iso(10 * MIN) });
+  const b = buildTowerBoard([washed, fresh], new Map(), NOW);
+  assert.equal(b.ready[0].probablyGone, true);
+  assert.equal(b.toPickUp[0].washedHere, true);
+  assert.equal(b.ready[0].conflict, false);
+});
+
+test('a waiting car that was there first and a washed car on the same number: one number is wrong', () => {
+  const waiting = order({ bayCodeSnapshot: '1232', createdAt: iso(300 * MIN) });
+  const washed = returned('1232', 'B3', 20);
+  const b = buildTowerBoard([waiting, washed], new Map(), NOW);
+  assert.equal(b.ready[0].conflict, true);
+  assert.equal(b.toPickUp[0].conflict, true);
+  assert.equal(b.ready[0].probablyGone, undefined);
+});
+
+test('a car with the team leaves its bay free for a new car', () => {
+  const away = order({ status: 'IN_PROGRESS', bayCodeSnapshot: '12' });
+  const fresh = order({ bayCodeSnapshot: '12' });
+  const b = buildTowerBoard([away, fresh], new Map(), NOW);
+  assert.equal(b.toPickUp[0].conflict, false);
+  assert.equal(b.withTeam.length, 1);
+});
+
+test('a car the team marked as collected leaves the ready list', () => {
+  const washed = returned('88', 'B3', 5);
+  const b = buildTowerBoard([washed], new Map(), NOW, new Set([washed.id]));
+  assert.equal(b.ready.length, 0);
+});

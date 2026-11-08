@@ -617,6 +617,35 @@ class MockStore {
     return newOrder;
   }
 
+  /** The team saw the owner take a washed car: it leaves the "ready" list. Recorded in the order's timeline with the exact time. */
+  public markCollected(orderId: string, actor: ActorContext): void {
+    const db = this.getDb();
+    const order = db.orders.find((o) => o.id === orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'RETURNED_TO_PARKING') throw new Error('Only a ready car can be marked as collected');
+    if (db.orderEvents.some((e) => e.orderId === orderId && e.type === 'COLLECTED')) return;
+
+    const now = new Date().toISOString();
+    db.orderEvents.push({
+      id: uid('evt'),
+      orderId,
+      type: 'COLLECTED',
+      actor: { type: actor.type, id: actor.id, name: actor.name },
+      payload: { floor: order.returnConfirmation?.floor, bay: order.returnConfirmation?.bayCode || order.bayCodeSnapshot },
+      createdAt: now,
+    });
+    db.auditLogs.unshift({
+      id: uid('aud'),
+      actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
+      action: 'order.collected',
+      entityType: 'ORDER',
+      entityId: orderId,
+      details: { reference: order.reference },
+      createdAt: now,
+    });
+    this.saveToStorage();
+  }
+
   public transitionOrder(
     orderId: string,
     toStatus: OrderStatus,
