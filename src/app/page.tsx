@@ -60,6 +60,8 @@ function BayOrderingClientScreen() {
   const [portalMode, setPortalMode] = useState<PortalMode>('UNSELECTED');
   const [showPhoneModal, setShowPhoneModal] = useState(false);
   const [authMode, setAuthMode] = useState<'LOGIN' | 'SIGNUP'>('LOGIN');
+  // A new account is made only after the person has checked the number on screen (a typo would start a second, empty account)
+  const [confirmNumber, setConfirmNumber] = useState<string | null>(null);
   const [employeePhone, setEmployeePhone] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -409,6 +411,10 @@ function BayOrderingClientScreen() {
       }
       if (!employeeNumber.trim()) {
         setPhoneError(t('employeeNoRequiredError'));
+        return;
+      }
+      if (confirmNumber !== qatarNumber) {
+        setConfirmNumber(qatarNumber);
         return;
       }
     }
@@ -945,7 +951,8 @@ function BayOrderingClientScreen() {
                         value={employeePhone}
                         onChange={(e) => {
                           // Digits only; a pasted +974 number is cut down to the 8 digits the server reads
-                          setEmployeePhone(e.target.value.replace(/D/g, '').slice(0, 14));
+                          setEmployeePhone(e.target.value.replace(/\D/g, '').slice(0, 14));
+                          setConfirmNumber(null);
                           setPhoneError('');
                         }}
                         className={`${fieldCls} tabular-nums ps-11`}
@@ -963,6 +970,16 @@ function BayOrderingClientScreen() {
                   )}
                 </div>
 
+                {authMode === 'SIGNUP' && confirmNumber && (
+                  <div role="alert" className="rounded-2xl bg-amber-400/10 p-4 space-y-2">
+                    <p className="text-sm font-semibold text-amber-200">{t('confirmNumberTitle')}</p>
+                    <p dir="ltr" className="text-[22px] font-semibold text-ink tabular-nums tracking-wide">
+                      +974 {confirmNumber.slice(0, 4)} {confirmNumber.slice(4)}
+                    </p>
+                    <p className="text-sm text-body leading-relaxed">{t('confirmNumberBody')}</p>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-3 pt-1">
                   <button
                     type="button"
@@ -972,7 +989,7 @@ function BayOrderingClientScreen() {
                     {t('cancelBtn')}
                   </button>
                   <button type="submit" disabled={authBusy} className={`${primaryBtn} flex-1 py-3 disabled:opacity-60`}>
-                    <span>{t('otpContinue')}</span>
+                    <span>{authMode === 'SIGNUP' && confirmNumber ? t('confirmNumberYes') : t('otpContinue')}</span>
                     <ArrowFwd className="h-4 w-4" />
                   </button>
                 </div>
@@ -982,6 +999,7 @@ function BayOrderingClientScreen() {
                     type="button"
                     onClick={() => {
                       setAuthMode(authMode === 'LOGIN' ? 'SIGNUP' : 'LOGIN');
+                      setConfirmNumber(null);
                       setPhoneError('');
                     }}
                     className="text-sm text-muted hover:text-ink transition"
