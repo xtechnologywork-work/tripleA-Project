@@ -483,7 +483,9 @@ function BayOrderingClientScreen() {
     : 0;
   const employeeOrders = currentEmployee ? mockStore.getEmployeeOrders(currentEmployee.id) : [];
   // Orders that are not finished yet: shown at the top so the tracking page is always one tap away
-  const activeOrders = employeeOrders.filter((o) => o.status !== 'RETURNED_TO_PARKING' && o.status !== 'CANCELLED');
+  const activeOrders = employeeOrders.filter((o) => o.status !== 'RETURNED_TO_PARKING' && o.status !== 'CANCELLED' && o.status !== 'DELAYED');
+  // A postponed order waits for the customer: it shows in the banner when nothing else is running
+  const bannerOrder = activeOrders[0] || employeeOrders.find((o) => o.status === 'DELAYED');
   const registeredVehicle = currentEmployee
     ? mockStore.getEmployeeVehicles(currentEmployee.id)[0]
     : null;
@@ -1187,20 +1189,20 @@ function BayOrderingClientScreen() {
       <main className="px-4 md:px-8 pt-6 md:pt-8 pb-6">
         <div className="max-w-[1100px] mx-auto space-y-4 md:space-y-5">
           {/* The order in progress: one tap to follow it */}
-          {activeOrders.length > 0 && (
+          {bannerOrder && (
             <Link
-              href={`/orders/${activeOrders[0].reference}`}
+              href={`/orders/${bannerOrder.reference}`}
               className={`${tile} hover:bg-tile-hover active:scale-[0.99] p-4 md:p-5 flex items-center gap-4 transition`}
             >
               <span className="h-12 w-12 rounded-2xl bg-fill flex items-center justify-center text-[17px] font-semibold text-ink tabular-nums flex-shrink-0">
-                {activeOrders[0].bayCodeSnapshot}
+                {bannerOrder.bayCodeSnapshot}
               </span>
               <div className="min-w-0 flex-1 space-y-1.5">
                 <div className="text-[15px] font-semibold text-ink">{t('activeOrderTitle')}</div>
-                <StatusBadge status={activeOrders[0].status} isCustomerView />
+                <StatusBadge status={bannerOrder.status} isCustomerView />
               </div>
               <span className="flex items-center gap-1 text-[15px] text-link flex-shrink-0">
-                {t('trackOrderBtn')}
+                {bannerOrder.status === 'DELAYED' ? t('reorderBtn') : t('trackOrderBtn')}
                 <ChevronFwd className="h-4 w-4" />
               </span>
             </Link>

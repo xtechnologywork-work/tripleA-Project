@@ -72,6 +72,7 @@ const STATUS_NAMES: Record<OrderStatus, string> = {
   COMPLETED: 'Completed',
   RETURNED_TO_PARKING: 'Ready at bay',
   ISSUE_REPORTED: 'Issue reported',
+  DELAYED: 'Delayed',
   CANCELLED: 'Cancelled',
 };
 

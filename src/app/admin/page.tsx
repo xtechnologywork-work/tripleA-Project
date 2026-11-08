@@ -10,7 +10,7 @@ import { InsightsView } from '@/components/admin/insights';
 import { QrPage } from '@/components/admin/qr-page';
 import { SafeImage } from '@/components/ui/safe-media';
 import type { DataSet } from '@/domain/analytics';
-import { awaitingOnlinePayment } from '@/domain/analytics';
+import { awaitingOnlinePayment, reorderTimes } from '@/domain/analytics';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
 import { isCleared } from '@/domain/inspection';
@@ -23,7 +23,7 @@ import {
   Employee,
   EmployeeSubscription,
 } from '@/domain/types';
-import { formatDateTime, formatQAR, readyPlace } from '@/lib/utils';
+import { formatDateTime, formatDateTimeExact, formatQAR, readyPlace } from '@/lib/utils';
 import { ActorContext, isValidStaffTransition } from '@/domain/status-machine';
 import {
   Search,
@@ -261,17 +261,23 @@ export default function AdminDashboardPage() {
   const seenOrderIds = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (orders.length === 0 && seenOrderIds.current === null) return;
+    // An order that comes back after being postponed counts as new again, so the team notices it
+    const back = reorderTimes(mockStore.getDb().orderEvents);
+    const keyOf = (o: Order) => (back.has(o.id) ? `${o.id}:re:${back.get(o.id)}` : o.id);
     if (seenOrderIds.current === null) {
-      seenOrderIds.current = new Set(orders.map((o) => o.id));
+      seenOrderIds.current = new Set(orders.flatMap((o) => [o.id, keyOf(o)]));
       return;
     }
     const known = seenOrderIds.current;
-    const fresh = orders.filter((o) => !known.has(o.id) && o.status === 'NEW');
-    orders.forEach((o) => known.add(o.id));
+    const fresh = orders.filter((o) => o.status === 'NEW' && !known.has(keyOf(o)));
+    orders.forEach((o) => {
+      known.add(o.id);
+      known.add(keyOf(o));
+    });
     if (fresh.length === 0) return;
     setToastMessage(
       fresh.length === 1
-        ? `New order ${fresh[0].reference} at bay ${fresh[0].bayCodeSnapshot}`
+        ? `${back.has(fresh[0].id) ? 'Order re-ordered' : 'New order'} ${fresh[0].reference} at bay ${fresh[0].bayCodeSnapshot}`
         : `${fresh.length} new orders`
     );
     setTimeout(() => setToastMessage(null), 5000);
@@ -316,9 +322,14 @@ export default function AdminDashboardPage() {
     });
   }, []);
 
+  // When each order came back after being postponed (the queue places it by that time, like a new order)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const reorderedAt = useMemo(() => reorderTimes(mockStore.getDb().orderEvents), [orders, lastSyncTime]);
+  const queuedAt = (o: Order) => reorderedAt.get(o.id) ?? new Date(o.createdAt).getTime();
+
   // Filtered Orders for Dispatch
   const filteredOrders = useMemo(() => {
-    return orders.filter((o) => {
+    const list = orders.filter((o) => {
       const q = searchQuery.toLowerCase().trim();
       const client = employees.find((e) => e.id === o.employeeId);
       const matchesSearch =
@@ -336,7 +347,10 @@ export default function AdminDashboardPage() {
 
       return matchesSearch && matchesStatus && matchesZone;
     });
-  }, [orders, searchQuery, statusFilter, zoneFilter, employees]);
+    // Newest placement first; postponed orders wait at the bottom, out of the team's way
+    return list.sort((a, b) => Number(a.status === 'DELAYED') - Number(b.status === 'DELAYED') || queuedAt(b) - queuedAt(a));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, searchQuery, statusFilter, zoneFilter, employees, reorderedAt]);
 
   const selectedOrder = orders.find((o) => o.id === selectedOrderId) || filteredOrders[0] || null;
   const selectedOrderClient = selectedOrder ? employees.find((e) => e.id === selectedOrder.employeeId) : null;
@@ -650,6 +664,7 @@ export default function AdminDashboardPage() {
       QUALITY_CHECK: { text: 'QC Check', dot: 'bg-ink', bg: 'bg-fill text-ink border-transparent' },
       COMPLETED: { text: 'Completed', dot: 'bg-teal-400', bg: 'bg-emerald-400/15 text-emerald-300 border-transparent' },
       RETURNED_TO_PARKING: { text: 'Returned to Bay', dot: 'bg-emerald-400', bg: 'bg-emerald-400/15 text-emerald-300 border-transparent' },
+      DELAYED: { text: 'Delayed', dot: 'bg-orange-400', bg: 'bg-orange-400/15 text-orange-300 border-transparent' },
       CANCELLED: { text: 'Cancelled', dot: 'bg-zinc-500', bg: 'bg-fill-soft text-dim border-transparent' },
       ISSUE_REPORTED: { text: 'Issue Reported', dot: 'bg-red-400', bg: 'bg-rose-400/15 text-rose-300 border-transparent' },
     };
@@ -715,6 +730,7 @@ export default function AdminDashboardPage() {
     { value: 'IN_PROGRESS', label: 'In Progress' },
     { value: 'QUALITY_CHECK', label: 'QC Check' },
     { value: 'RETURNED_TO_PARKING', label: 'Returned' },
+    { value: 'DELAYED', label: `Delayed (${orders.filter((o) => o.status === 'DELAYED').length})` },
     { value: 'CANCELLED', label: 'Cancelled' },
   ];
 
@@ -1164,7 +1180,7 @@ export default function AdminDashboardPage() {
                         <div
                           key={ord.id}
                           onClick={() => openOrder(ord.id)}
-                          className={`p-4 rounded-2xl cursor-pointer transition flex items-start gap-3 ${
+                          className={`p-4 rounded-2xl cursor-pointer transition flex items-start gap-3 ${ord.status === 'DELAYED' ? 'opacity-70 ' : ''}${
                             isSelected
                               ? 'bg-tile min-[1360px]:bg-raised min-[1360px]:ring-2 min-[1360px]:ring-[#2997ff]'
                               : 'bg-tile hover:bg-tile-hover'
@@ -1192,7 +1208,7 @@ export default function AdminDashboardPage() {
                           <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
                             {renderStatusPill(ord.status)}
                             <span className="text-xs tabular-nums text-dim">
-                              {new Date(ord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              {new Date(queuedAt(ord)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
                         </div>
@@ -1230,6 +1246,12 @@ export default function AdminDashboardPage() {
                           </span>
                           <span className="text-faint">·</span>
                           <span className="tabular-nums">Submitted {formatDateTime(selectedOrder.createdAt)}</span>
+                          {reorderedAt.has(selectedOrder.id) && selectedOrder.status !== 'DELAYED' && (
+                            <>
+                              <span className="text-faint">·</span>
+                              <span className="tabular-nums text-orange-300">Re-ordered {formatDateTime(new Date(reorderedAt.get(selectedOrder.id)!).toISOString())}</span>
+                            </>
+                          )}
                         </div>
                       </div>
 
@@ -1244,16 +1266,18 @@ export default function AdminDashboardPage() {
                     </div>
 
                     {/* Pre-wash inspection: comes first, and opens Start Wash */}
-                    <InspectionCard
-                      order={selectedOrder}
-                      before={selectedBefore}
-                      after={selectedAfter}
-                      enabled={inspectionEnabled}
-                      onStart={(phase) => setInspectionFlow({ phase, editing: false })}
-                      onEdit={(phase) => setInspectionFlow({ phase, editing: true })}
-                      onSkip={() => setDialog({ kind: 'skipInspection' })}
-                      onView={() => setInspectionViewOpen(true)}
-                    />
+                    {selectedOrder.status !== 'DELAYED' && (
+                      <InspectionCard
+                        order={selectedOrder}
+                        before={selectedBefore}
+                        after={selectedAfter}
+                        enabled={inspectionEnabled}
+                        onStart={(phase) => setInspectionFlow({ phase, editing: false })}
+                        onEdit={(phase) => setInspectionFlow({ phase, editing: true })}
+                        onSkip={() => setDialog({ kind: 'skipInspection' })}
+                        onView={() => setInspectionViewOpen(true)}
+                      />
+                    )}
 
                     {/* Progress: where the order is, and the one thing to do next */}
                     {(() => {
@@ -1312,6 +1336,13 @@ export default function AdminDashboardPage() {
 
                           {st === 'CANCELLED' ? (
                             <p className="rounded-2xl bg-inset p-4 text-sm text-muted">This order was cancelled. Nothing more to do.</p>
+                          ) : st === 'DELAYED' ? (
+                            <div className="rounded-2xl bg-orange-400/10 p-4 md:p-5 space-y-1.5">
+                              <p className="text-[15px] font-semibold text-orange-300">Postponed by the customer</p>
+                              <p className="text-sm text-body leading-relaxed">
+                                Nothing to do now. The order comes back to the top of the queue by itself when the customer re-orders it.
+                              </p>
+                            </div>
                           ) : (
                             <>
                               <ol className="grid grid-cols-4 gap-2 md:gap-3" aria-label="Order progress">
@@ -1622,16 +1653,35 @@ export default function AdminDashboardPage() {
                       <div className={`${card} p-4 md:p-6 space-y-4`}>
                         <h3 className="text-base font-semibold text-ink">Lifecycle Audit Trail</h3>
                         <ol className="space-y-3">
-                          {selectedOrderEvents.map((ev) => (
-                            <li key={ev.id} className="flex items-center gap-3 text-sm">
-                              <span className="w-2 h-2 rounded-full bg-[#2997ff] flex-shrink-0" />
-                              <span className="flex-1 text-muted min-w-0">
-                                {ev.from ? `${ev.from} → ` : ''}
-                                <strong className="text-ink font-semibold">{ev.to || ev.type}</strong>
-                              </span>
-                              <span className="text-xs text-dim tabular-nums whitespace-nowrap">{formatDateTime(ev.createdAt)}</span>
-                            </li>
-                          ))}
+                          {selectedOrderEvents.map((ev) => {
+                            const delayed = ev.type === 'DELAYED';
+                            const reordered = ev.type === 'REORDERED';
+                            const bay = typeof ev.payload?.bay === 'string' ? ev.payload.bay : '';
+                            return (
+                              <li key={ev.id} className="flex items-center gap-3 text-sm">
+                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${delayed || reordered ? 'bg-orange-400' : 'bg-[#2997ff]'}`} />
+                                <span className="flex-1 text-muted min-w-0">
+                                  {delayed ? (
+                                    <>
+                                      <strong className="text-orange-300 font-semibold">Customer postponed the order</strong>
+                                      {ev.from ? ` (it was ${ev.from})` : ''}
+                                    </>
+                                  ) : reordered ? (
+                                    <>
+                                      <strong className="text-orange-300 font-semibold">Customer re-ordered it</strong>
+                                      {bay ? ` · car at bay ${bay}` : ''}
+                                    </>
+                                  ) : (
+                                    <>
+                                      {ev.from ? `${ev.from} → ` : ''}
+                                      <strong className="text-ink font-semibold">{ev.to || ev.type}</strong>
+                                    </>
+                                  )}
+                                </span>
+                                <span className="text-xs text-dim tabular-nums whitespace-nowrap">{formatDateTimeExact(ev.createdAt)}</span>
+                              </li>
+                            );
+                          })}
                         </ol>
                       </div>
                     )}

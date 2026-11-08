@@ -317,6 +317,19 @@ const minutesBetween = (from: number | undefined, to: number | undefined): numbe
 /** An order made when the customer opened the online payment page, and not paid (yet). It is not money and not a wash. */
 export const awaitingOnlinePayment = (o: Order): boolean => o.paymentStatus === 'UNPAID' && String(o.idempotencyKey || '').startsWith('pay:');
 
+/** When each order was last re-ordered by its customer (after postponing it). Orders never re-ordered are not in the map. */
+export function reorderTimes(events: OrderEvent[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const e of events) {
+    if (e.type !== 'REORDERED') continue;
+    const t = ms(e.createdAt);
+    if (!Number.isFinite(t)) continue;
+    const prev = out.get(e.orderId);
+    if (prev === undefined || t > prev) out.set(e.orderId, t);
+  }
+  return out;
+}
+
 /** What the order cost the employee, per wash. A pass wash costs the pass price divided by its washes. */
 export function effectiveWashMinor(order: Order, subscriptions: EmployeeSubscription[]): number {
   if (order.paymentMode !== 'CREDIT') return order.priceSnapshot?.amountMinor || 0;
@@ -464,7 +477,7 @@ export function computeSummary(data: DataSet, range: Range): Summary {
   const resolved = periodIssues.filter((i) => i.status === 'RESOLVED' && Number.isFinite(ms(i.resolvedAt)));
 
   // ---- order mix ----
-  const statusOrder: OrderStatus[] = ['NEW', 'ASSIGNED', 'IN_PROGRESS', 'QUALITY_CHECK', 'COMPLETED', 'RETURNED_TO_PARKING', 'ISSUE_REPORTED', 'CANCELLED'];
+  const statusOrder: OrderStatus[] = ['NEW', 'ASSIGNED', 'IN_PROGRESS', 'QUALITY_CHECK', 'COMPLETED', 'RETURNED_TO_PARKING', 'ISSUE_REPORTED', 'DELAYED', 'CANCELLED'];
   const statusMix = statusOrder
     .map((status) => ({ status, count: inPeriod.filter((o) => o.status === status).length }))
     .filter((x) => x.count > 0);
@@ -568,7 +581,9 @@ export function computePulse(data: DataSet, now: number): Pulse {
   };
 
   const waiting = active.filter((o) => o.status === 'NEW');
-  const waits = waiting.map((o) => (now - ms(o.createdAt)) / MIN).filter((m) => Number.isFinite(m) && m >= 0);
+  // A re-ordered order waits from the moment it came back, not from the first time it was placed
+  const back = reorderTimes(events);
+  const waits = waiting.map((o) => (now - (back.get(o.id) ?? ms(o.createdAt))) / MIN).filter((m) => Number.isFinite(m) && m >= 0);
 
   const stuck: Pulse['stuck'] = [];
   for (const o of active) {

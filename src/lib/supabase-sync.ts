@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabase, hasServiceKey } from './supabase-server';
 import { MockDatabase, TOTAL_BAYS } from '../data/mock/seed';
-import { isValidStaffTransition } from '../domain/status-machine';
+import { isValidStaffTransition, isCustomerMove } from '../domain/status-machine';
 import { validateInspection, requiresPreWashInspection } from '../domain/inspection';
 import {
   Employee,
@@ -827,7 +827,7 @@ export async function applyChanges(input: SyncChanges, identity: Identity): Prom
 
         const from = String(current.status) as OrderStatus;
         if (order.status !== from) {
-          const customerCancel = from === 'NEW' && order.status === 'CANCELLED';
+          const customerCancel = isCustomerMove(from, order.status); // cancel, postpone, or re-order (customer moves)
           const statusBefore = current.status_before_issue ? (String(current.status_before_issue) as OrderStatus) : undefined;
           if (!isAdmin && !customerCancel) {
             result.rejected.push(`${order.reference}: ${from} -> ${order.status} needs an admin`);
@@ -1182,29 +1182,43 @@ async function validateEmployeeBatch(
       });
       continue;
     }
-    // Existing order: the only customer action is to cancel while it is still NEW
-    const from = String(current.status);
+    // Existing order: the customer may cancel a new order, postpone it before the wash starts, or re-order a postponed one
+    const from = String(current.status) as OrderStatus;
     if (o.status === from) continue; // nothing to save
-    if (!(from === 'NEW' && o.status === 'CANCELLED')) {
-      errors.push(`order ${o.reference}: you can only cancel an order that is still new`);
+    if (!isCustomerMove(from, o.status)) {
+      errors.push(`order ${o.reference}: it cannot be changed from here now`);
       continue;
     }
     // A wash paid online needs a refund, so only the team can cancel it
-    if (String(current.payment_status) === 'PAID_ONLINE' && String(current.payment_mode) === 'ONE_TIME') {
+    if (o.status === 'CANCELLED' && String(current.payment_status) === 'PAID_ONLINE' && String(current.payment_mode) === 'ONE_TIME') {
       errors.push(`order ${o.reference}: a paid order is cancelled by the team`);
       continue;
     }
-    // The row is written back whole, so nothing except the status may differ from what is stored
+    // Re-ordering: the car may be parked somewhere else now, so the bay is typed again (and checked)
+    const reorder = from === 'DELAYED' && o.status === 'NEW';
+    const reorderBay = parseInt(String(o.bayCodeSnapshot ?? ''), 10);
+    if (reorder && (!Number.isInteger(reorderBay) || reorderBay < 1 || reorderBay > TOTAL_BAYS)) {
+      errors.push(`order ${o.reference}: bay must be 1 to ${TOTAL_BAYS}`);
+      continue;
+    }
+    // The row is written back whole, so nothing except the status (and the bay of a re-order) may differ from what is stored
     const same =
       Number(current.credits_used || 0) === Number(o.creditsUsed || 0) &&
       String(current.payment_mode) === String(o.paymentMode) &&
-      String(current.bay_code_snapshot) === String(o.bayCodeSnapshot) &&
+      (reorder || String(current.bay_code_snapshot) === String(o.bayCodeSnapshot)) &&
       Number((current.price_snapshot as Row | null)?.amountMinor) === Number(o.priceSnapshot?.amountMinor);
     if (!same) {
       errors.push(`order ${o.reference}: only the status can change`);
       continue;
     }
-    keptOrders.push(o);
+    keptOrders.push({
+      ...o,
+      // The payment state always comes from what is stored, never from the request
+      paymentStatus: String(current.payment_status || 'NOT_APPLICABLE') as Order['paymentStatus'],
+      // Postponing and re-ordering take the team off the order
+      ...(o.status === 'DELAYED' || reorder ? { assignment: undefined } : {}),
+      ...(reorder ? { bayCodeSnapshot: String(reorderBay), bayId: `bay-${reorderBay}` } : {}),
+    });
   }
   fixed.orders = keptOrders;
 
@@ -1274,7 +1288,7 @@ async function validateEmployeeBatch(
   }
   for (const ev of changes.orderEvents || []) {
     if (!isMyOrder(ev.orderId) || ev.actor.id !== me || (evOwners.has(ev.id) && evOwners.get(ev.id) !== ev.orderId)) errors.push('timeline: not yours');
-    if (ev.to && !['NEW', 'CANCELLED'].includes(ev.to)) errors.push('timeline: not allowed');
+    if (ev.to && !['NEW', 'CANCELLED', 'DELAYED'].includes(ev.to)) errors.push('timeline: not allowed');
   }
   for (const a of changes.auditLogs || []) {
     if (a.actor.id !== me) errors.push('audit: not yours');

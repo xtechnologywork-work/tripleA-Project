@@ -153,7 +153,9 @@ export type OrderStatus =
   | 'COMPLETED'
   | 'RETURNED_TO_PARKING'
   | 'CANCELLED'
-  | 'ISSUE_REPORTED';
+  | 'ISSUE_REPORTED'
+  /** The customer postponed a paid order (before the wash started). It waits, with no team work, until they re-order. */
+  | 'DELAYED';
 
 export interface Order {
   id: string;
@@ -223,7 +225,7 @@ export interface OrderEvent {
   orderId: string;
   from?: OrderStatus;
   to?: OrderStatus;
-  type: 'CREATED' | 'STATUS_CHANGED' | 'ASSIGNED' | 'REASSIGNED' | 'NOTE' | 'PHOTO_ADDED' | 'ISSUE' | 'QC' | 'RETURNED';
+  type: 'CREATED' | 'STATUS_CHANGED' | 'ASSIGNED' | 'REASSIGNED' | 'NOTE' | 'PHOTO_ADDED' | 'ISSUE' | 'QC' | 'RETURNED' | 'DELAYED' | 'REORDERED';
   actor: {
     type: PrincipalType;
     id: string;

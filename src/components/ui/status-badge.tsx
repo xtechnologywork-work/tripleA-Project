@@ -15,6 +15,7 @@ export const AR_CUSTOMER_LABELS: Record<OrderStatus, string> = {
   RETURNED_TO_PARKING: 'جاهزة في الموقف',
   ISSUE_REPORTED: 'تحديث على الخدمة',
   CANCELLED: 'تم إلغاء الطلب',
+  DELAYED: 'تم تأجيل الطلب',
 };
 
 interface StatusBadgeProps {
@@ -42,6 +43,7 @@ export function StatusBadge({ status, isCustomerView = false, className }: Statu
     purple: { bg: 'bg-fill', text: 'text-ink', dot: 'bg-ink', border: 'border-transparent' },
     teal: { bg: 'bg-emerald-400/15', text: 'text-emerald-300', dot: 'bg-emerald-400', border: 'border-transparent' },
     success: { bg: 'bg-emerald-400/15', text: 'text-emerald-300', dot: 'bg-emerald-400', border: 'border-transparent' },
+    delayed: { bg: 'bg-orange-400/15', text: 'text-orange-300', dot: 'bg-orange-400', border: 'border-transparent' },
     danger: { bg: 'bg-rose-400/15', text: 'text-rose-300', dot: 'bg-rose-400', border: 'border-transparent' },
     muted: { bg: 'bg-fill-soft', text: 'text-dim', dot: 'bg-zinc-600', border: 'border-transparent' },
   };

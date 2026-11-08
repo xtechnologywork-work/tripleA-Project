@@ -1,4 +1,4 @@
-import { MockDatabase, createInitialSeed } from './seed';
+import { MockDatabase, createInitialSeed, TOTAL_BAYS } from './seed';
 import {
   Employee,
   EmployeeSubscription,
@@ -626,6 +626,8 @@ class MockStore {
       returnConfirmation?: Order['returnConfirmation'];
       cancellation?: { reason: string };
       issue?: { category: string; description: string; severity: 'LOW' | 'MEDIUM' | 'HIGH' };
+      /** Re-ordering a postponed order: the bay where the car is parked now */
+      reorderBay?: string;
     },
     actor: ActorContext
   ): Order {
@@ -649,10 +651,27 @@ class MockStore {
 
     const now = new Date().toISOString();
     const previousStatus = order.status;
+    const previousBay = order.bayCodeSnapshot;
+
+    // Checked before anything changes, so a wrong bay leaves the order as it was
+    const reorderBay = parseInt(String(payload.reorderBay ?? ''), 10);
+    if (previousStatus === 'DELAYED' && toStatus === 'NEW' && (!Number.isInteger(reorderBay) || reorderBay < 1 || reorderBay > TOTAL_BAYS)) {
+      throw new Error('Type the parking bay where your car is now');
+    }
 
     order.status = toStatus;
     order.updatedAt = now;
     order.version += 1;
+
+    // Postponing frees the team: no one is assigned. Re-ordering puts the order back in the queue, at the bay where the car is now.
+    if (toStatus === 'DELAYED') {
+      order.assignment = undefined;
+    }
+    if (previousStatus === 'DELAYED' && toStatus === 'NEW') {
+      order.assignment = undefined;
+      order.bayCodeSnapshot = String(reorderBay);
+      order.bayId = `bay-${reorderBay}`;
+    }
 
     // Apply specific transition payload data
     if (payload.assignment) {
@@ -708,9 +727,21 @@ class MockStore {
       orderId: order.id,
       from: previousStatus,
       to: toStatus,
-      type: toStatus === 'ASSIGNED' ? 'ASSIGNED' : 'STATUS_CHANGED',
+      type:
+        toStatus === 'DELAYED'
+          ? 'DELAYED'
+          : previousStatus === 'DELAYED' && toStatus === 'NEW'
+            ? 'REORDERED'
+            : toStatus === 'ASSIGNED'
+              ? 'ASSIGNED'
+              : 'STATUS_CHANGED',
       actor: { type: actor.type, id: actor.id, name: actor.name },
-      payload: payload as Record<string, unknown>,
+      payload:
+        toStatus === 'DELAYED'
+          ? { bay: previousBay, wasStatus: previousStatus }
+          : previousStatus === 'DELAYED' && toStatus === 'NEW'
+            ? { bay: order.bayCodeSnapshot, previousBay }
+            : (payload as Record<string, unknown>),
       createdAt: now,
     });
 

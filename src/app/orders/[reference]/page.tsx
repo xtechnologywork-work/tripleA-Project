@@ -7,6 +7,7 @@ import { mockStore } from '@/data/mock/store';
 import { Order, OrderEvent, OrderPhoto } from '@/domain/types';
 import { formatDateTime, formatQAR, plateLabel, readyPlace, serviceName } from '@/lib/utils';
 import { SUPPORT_WHATSAPP } from '@/lib/support';
+import { TOTAL_BAYS } from '@/data/mock/seed';
 import { SafeImage } from '@/components/ui/safe-media';
 import {
   ArrowLeft,
@@ -51,6 +52,12 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   const [gaveUp, setGaveUp] = useState(false);
   const [askCancel, setAskCancel] = useState(false);
   const [cancelError, setCancelError] = useState('');
+  // Postponing an order, and re-ordering it later
+  const [askDelay, setAskDelay] = useState(false);
+  const [delayError, setDelayError] = useState('');
+  const [reorderBay, setReorderBay] = useState<string | null>(null);
+  const [reorderError, setReorderError] = useState('');
+  const [moving, setMoving] = useState(false);
   const lang = isRtl ? 'ar' : 'en';
 
   useEffect(() => {
@@ -154,15 +161,57 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   const currentStepIdx = getStepIndex(order.status);
   const isCancelled = order.status === 'CANCELLED';
   const isIssue = order.status === 'ISSUE_REPORTED';
+  const isDelayed = order.status === 'DELAYED';
+  const paidOnlineSingle = order.paymentStatus === 'PAID_ONLINE' && order.paymentMode === 'ONE_TIME';
+
+  // The person acting is the owner of the order (the server checks this against the sign in)
+  const whoActs = () => {
+    const owner = mockStore.getEmployeeById(order.employeeId);
+    return actor.id === order.employeeId
+      ? actor
+      : { type: 'EMPLOYEE' as const, id: order.employeeId, name: owner?.fullName || '', email: owner?.email || '' };
+  };
+
+  // Postpone: the order stays saved and paid, the team stops working on it
+  const handleDelay = () => {
+    if (moving) return;
+    setMoving(true);
+    try {
+      mockStore.transitionOrder(order.id, 'DELAYED', {}, whoActs());
+      setAskDelay(false);
+      setDelayError('');
+      setReorderBay(null);
+    } catch (err: unknown) {
+      setDelayError((err instanceof Error ? err.message : String(err)) || (isRtl ? 'تعذر تأجيل الطلب' : 'Could not postpone the order'));
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  // Re-order: back in the queue, at the bay where the car is parked now, with no second payment
+  const handleReorder = () => {
+    if (moving) return;
+    const bay = (reorderBay ?? order.bayCodeSnapshot).replace(/\D/g, '');
+    const n = parseInt(bay, 10);
+    if (!Number.isInteger(n) || n < 1 || n > TOTAL_BAYS) {
+      setReorderError(isRtl ? `اكتب رقم موقف صحيح من 1 إلى ${TOTAL_BAYS}.` : `Type a parking bay from 1 to ${TOTAL_BAYS}.`);
+      return;
+    }
+    setMoving(true);
+    try {
+      mockStore.transitionOrder(order.id, 'NEW', { reorderBay: String(n) }, whoActs());
+      setReorderError('');
+      setReorderBay(null);
+    } catch (err: unknown) {
+      setReorderError((err instanceof Error ? err.message : String(err)) || (isRtl ? 'تعذرت إعادة الطلب' : 'Could not re-order'));
+    } finally {
+      setMoving(false);
+    }
+  };
 
   const handleCancel = () => {
     try {
-      // The person cancelling is the owner of the order (the server checks this against the sign in)
-      const owner = mockStore.getEmployeeById(order.employeeId);
-      const who =
-        actor.id === order.employeeId
-          ? actor
-          : { type: 'EMPLOYEE' as const, id: order.employeeId, name: owner?.fullName || '', email: owner?.email || '' };
+      const who = whoActs();
       mockStore.transitionOrder(
         order.id,
         'CANCELLED',
@@ -186,6 +235,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   // Get dynamic headline
   const getHeadline = () => {
     if (isCancelled) return isRtl ? 'تم إلغاء الطلب' : 'Order cancelled';
+    if (isDelayed) return isRtl ? 'تم تأجيل طلبك' : 'Order postponed';
     if (isIssue) return isRtl ? 'تنبيه تشغيلي قيد المتابعة' : 'Under review';
 
     switch (order.status) {
@@ -296,7 +346,42 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               </div>
             )}
 
-            {!isCancelled && (
+            {isDelayed && (
+              <div className="rounded-2xl bg-orange-400/10 p-4 md:p-5 space-y-4">
+                <p className="text-[15px] text-body leading-relaxed">
+                  {isRtl
+                    ? 'طلبك محفوظ ومدفوع، والفريق متوقف عنه. عندما تكون جاهزاً اكتب موقف سيارتك الآن ثم اضغط إعادة الطلب، وسيعود طلبك لأول الطابور بدون دفع جديد.'
+                    : 'Your order is saved and paid, and the team has stopped working on it. When you are ready, type the bay where your car is parked now and press Re-order. It goes back to the top of the queue, with no new payment.'}
+                </p>
+                <label className="block space-y-2">
+                  <span className="text-sm text-body">{isRtl ? 'موقف سيارتك الآن' : 'Where your car is parked now'}</span>
+                  <input
+                    value={reorderBay ?? order.bayCodeSnapshot}
+                    onChange={(e) => {
+                      setReorderBay(e.target.value.replace(/\D/g, '').slice(0, 4));
+                      setReorderError('');
+                    }}
+                    inputMode="numeric"
+                    placeholder={isRtl ? 'رقم الموقف' : 'Bay number'}
+                    className="w-full rounded-2xl bg-fill px-4 py-3.5 text-[17px] text-ink tabular-nums outline-none focus:ring-2 focus:ring-[#0071e3] placeholder:text-dim"
+                  />
+                </label>
+                {reorderError && (
+                  <p role="alert" className="text-sm text-rose-300">
+                    {reorderError}
+                  </p>
+                )}
+                <button
+                  onClick={handleReorder}
+                  disabled={moving}
+                  className="w-full py-3.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white text-[16px] font-semibold transition active:scale-95 disabled:opacity-60"
+                >
+                  {isRtl ? 'إعادة الطلب' : 'Re-order'}
+                </button>
+              </div>
+            )}
+
+            {!isCancelled && !isDelayed && (
               <ol className="pt-2">
                 {statusSteps.map((step, idx) => {
                   const isDone = currentStepIdx > idx;
@@ -487,7 +572,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               </div>
 
               <div className="flex items-center justify-between gap-3">
-                <dt className="text-muted">{isRtl ? 'استلمناها من الموقف' : 'Picked up from bay'}</dt>
+                <dt className="text-muted">{readyPlace(order) ? (isRtl ? 'استلمناها من الموقف' : 'Picked up from bay') : isRtl ? 'موقف السيارة' : 'Parking bay'}</dt>
                 <dd className="tabular-nums font-semibold text-ink">
                   {order.bayCodeSnapshot}
                 </dd>
@@ -542,13 +627,25 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               </a>
             )}
 
-            {order.status === 'NEW' && order.paymentStatus === 'PAID_ONLINE' && order.paymentMode === 'ONE_TIME' && (
+            {(order.status === 'NEW' || order.status === 'ASSIGNED') && (
+              <button
+                onClick={() => {
+                  setDelayError('');
+                  setAskDelay(true);
+                }}
+                className="w-full py-3 rounded-full bg-orange-400/10 hover:bg-orange-400/15 text-orange-300 text-[14px] transition active:scale-95"
+              >
+                {isRtl ? 'تأجيل الطلب' : 'Postpone order'}
+              </button>
+            )}
+
+            {(order.status === 'NEW' || isDelayed) && paidOnlineSingle && (
               <p className="text-center text-sm text-dim px-2">
                 {isRtl ? 'لإلغاء طلب مدفوع واسترجاع المبلغ، تواصل مع فريق TripleA.' : 'To cancel a paid order and get your money back, contact the TripleA team.'}
               </p>
             )}
 
-            {order.status === 'NEW' && !(order.paymentStatus === 'PAID_ONLINE' && order.paymentMode === 'ONE_TIME') && (
+            {(order.status === 'NEW' || isDelayed) && !paidOnlineSingle && (
               <button
                 onClick={() => {
                   setCancelError('');
@@ -562,6 +659,45 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
           </div>
         </div>
       </div>
+
+      {/* Postpone dialog */}
+      {askDelay && (
+        <div className="fixed inset-0 z-50 bg-scrim backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setAskDelay(false)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delay-title"
+            className="w-full max-w-[400px] rounded-[28px] bg-tile p-6 space-y-5 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="delay-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">
+              {isRtl ? 'تأجيل هذا الطلب؟' : 'Postpone this order?'}
+            </h2>
+            <p className="text-[15px] text-muted leading-relaxed">
+              {isRtl
+                ? 'يبقى طلبك محفوظاً ومدفوعاً، ويتوقف الفريق عنه. عندما تكون جاهزاً افتح هذه الصفحة واضغط إعادة الطلب.'
+                : 'Your order stays saved and paid, and the team stops working on it. When you are ready, open this page and press Re-order.'}
+            </p>
+            {delayError && (
+              <p role="alert" className="text-sm text-rose-300">
+                {delayError}
+              </p>
+            )}
+            <div className="space-y-2.5">
+              <button
+                onClick={handleDelay}
+                disabled={moving}
+                className="w-full py-3.5 rounded-full bg-orange-500 hover:bg-orange-400 text-white text-[16px] transition active:scale-95 disabled:opacity-60"
+              >
+                {isRtl ? 'نعم، أجّل الطلب' : 'Yes, postpone it'}
+              </button>
+              <button onClick={() => setAskDelay(false)} className="w-full py-3.5 rounded-full bg-fill hover:bg-fill-strong text-ink text-[16px] transition active:scale-95">
+                {isRtl ? 'إبقاء الطلب' : 'Keep the order'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Cancel dialog */}
       {askCancel && (

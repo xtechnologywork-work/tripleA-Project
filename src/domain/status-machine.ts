@@ -1,4 +1,4 @@
-import { OrderStatus, PrincipalType, Permission, StaffRole, Order } from './types';
+import type { OrderStatus, PrincipalType, Permission, StaffRole, Order } from './types';
 
 export const ALL_PERMISSIONS: Permission[] = [
   'orders.view',
@@ -179,6 +179,12 @@ export const TRANSITION_RULES: TransitionRule[] = [
     to: 'CANCELLED',
     allowedActors: ['EMPLOYEE', 'STAFF'],
   },
+  // The customer postpones a paid order before the wash starts, and re-orders it later (no second payment)
+  { from: 'NEW', to: 'DELAYED', allowedActors: ['EMPLOYEE'] },
+  { from: 'ASSIGNED', to: 'DELAYED', allowedActors: ['EMPLOYEE'] },
+  { from: 'DELAYED', to: 'NEW', allowedActors: ['EMPLOYEE'] },
+  { from: 'DELAYED', to: 'CANCELLED', allowedActors: ['EMPLOYEE'] },
+  { from: 'DELAYED', to: 'CANCELLED', permission: 'orders.cancel', allowedActors: ['STAFF'] },
   {
     from: 'ASSIGNED',
     to: 'CANCELLED',
@@ -247,11 +253,9 @@ export function getAllowedTransitions(order: Order, actor: ActorContext): OrderS
       if (rule.permission && !hasPermission(actor, rule.permission)) {
         continue;
       }
-      // If employee, can only cancel their own order while status is NEW
-      if (actor.type === 'EMPLOYEE') {
-        if (rule.to === 'CANCELLED' && (order.employeeId !== actor.id || order.status !== 'NEW')) {
-          continue;
-        }
+      // An employee can only act on their own order
+      if (actor.type === 'EMPLOYEE' && order.employeeId !== actor.id) {
+        continue;
       }
       allowed.add(rule.to);
     }
@@ -313,6 +317,12 @@ export const STATUS_META: Record<
     description: 'Special attention or access required',
     badgeVariant: 'danger',
   },
+  DELAYED: {
+    label: 'Delayed',
+    customerLabel: 'Order Postponed',
+    description: 'The customer postponed this paid order; it returns to the queue when they re-order',
+    badgeVariant: 'delayed',
+  },
   CANCELLED: {
     label: 'Cancelled',
     customerLabel: 'Order Cancelled',
@@ -336,6 +346,19 @@ export function isValidStaffTransition(
   }
   // An order with a reported issue may resume the state it had before
   return from === 'ISSUE_REPORTED' && !!statusBeforeIssue && to === statusBeforeIssue;
+}
+
+/**
+ * What a customer may do to their own order: cancel it while it is new, postpone it before the wash starts,
+ * re-order a postponed one, or cancel a postponed one. Used by the screen and by the server.
+ */
+export function isCustomerMove(from: OrderStatus, to: OrderStatus): boolean {
+  return (
+    (from === 'NEW' && to === 'CANCELLED') ||
+    (from === 'DELAYED' && to === 'CANCELLED') ||
+    ((from === 'NEW' || from === 'ASSIGNED') && to === 'DELAYED') ||
+    (from === 'DELAYED' && to === 'NEW')
+  );
 }
 
 /** Everything staff may do next from this status. */

@@ -37,6 +37,23 @@ export function readyPlace(order: { status: string; returnConfirmation?: { floor
   return { floor: r.floor || 'B3', bay: r.bayCode };
 }
 
+/** Date and time down to the second, for the audit trail. */
+export function formatDateTimeExact(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    return new Intl.DateTimeFormat('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(date);
+  } catch {
+    return isoString;
+  }
+}
+
 export function formatDateTime(isoString: string, lang: UiLang = 'en'): string {
   try {
     const date = new Date(isoString);
