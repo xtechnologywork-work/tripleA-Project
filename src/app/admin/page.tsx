@@ -264,13 +264,15 @@ export default function AdminDashboardPage() {
     // An order that comes back after being postponed counts as new again, so the team notices it
     const back = reorderTimes(mockStore.getDb().orderEvents);
     const keyOf = (o: Order) => (back.has(o.id) ? `${o.id}:re:${back.get(o.id)}` : o.id);
+    // An order still waiting for its online payment is not announced: it counts as new when it is paid
+    const placed = orders.filter((o) => !awaitingOnlinePayment(o));
     if (seenOrderIds.current === null) {
-      seenOrderIds.current = new Set(orders.flatMap((o) => [o.id, keyOf(o)]));
+      seenOrderIds.current = new Set(placed.flatMap((o) => [o.id, keyOf(o)]));
       return;
     }
     const known = seenOrderIds.current;
-    const fresh = orders.filter((o) => o.status === 'NEW' && !known.has(keyOf(o)));
-    orders.forEach((o) => {
+    const fresh = placed.filter((o) => o.status === 'NEW' && !known.has(keyOf(o)));
+    placed.forEach((o) => {
       known.add(o.id);
       known.add(keyOf(o));
     });
@@ -1295,11 +1297,13 @@ export default function AdminDashboardPage() {
                       ];
 
                       // The next move, and whether it is open yet
+                      // An order still waiting for its online payment is not worked on until it is paid
+                      const unpaid = awaitingOnlinePayment(order);
                       let next: { to: OrderStatus; label: string; hint: string; open: boolean } | null = null;
                       if (st === 'NEW') {
-                        next = { to: 'ASSIGNED', label: 'Assign team', hint: 'The TripleA team takes this car.', open: open2 };
+                        next = { to: 'ASSIGNED', label: 'Assign team', hint: 'The TripleA team takes this car.', open: open2 && !unpaid };
                       } else if (st === 'ASSIGNED') {
-                        next = { to: 'IN_PROGRESS', label: 'Start wash', hint: 'The customer sees that the wash has started.', open: open3 };
+                        next = { to: 'IN_PROGRESS', label: 'Start wash', hint: 'The customer sees that the wash has started.', open: open3 && !unpaid };
                       } else if (st === 'IN_PROGRESS' || st === 'QUALITY_CHECK' || st === 'COMPLETED') {
                         next = {
                           to: 'RETURNED_TO_PARKING',
@@ -1382,7 +1386,9 @@ export default function AdminDashboardPage() {
                                   <div className="min-w-0">
                                     <p className="text-xs text-dim">Next step</p>
                                     <p className="text-[15px] font-semibold text-ink mt-0.5">{next.label}</p>
-                                    <p className="text-sm text-muted mt-0.5">{next.open ? next.hint : lockHint}</p>
+                                    <p className="text-sm text-muted mt-0.5">
+                                      {next.open ? next.hint : unpaid && (st === 'NEW' || st === 'ASSIGNED') ? 'Waiting for the customer to pay online' : lockHint}
+                                    </p>
                                     {next.to === 'RETURNED_TO_PARKING' && next.open && (
                                       <div className="mt-3 flex items-end gap-2.5">
                                         <label className="block">

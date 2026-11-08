@@ -7,6 +7,7 @@ import Image from 'next/image';
 import { mockStore } from '@/data/mock/store';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { compressImage } from '@/lib/image';
+import { awaitingOnlinePayment } from '@/domain/analytics';
 import type { ActorContext } from '@/domain/status-machine';
 import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
@@ -1209,7 +1210,12 @@ function BayOrderingClientScreen() {
               </span>
               <div className="min-w-0 flex-1 space-y-1.5">
                 <div className="text-sm text-muted tabular-nums">{bannerOrder.reference}</div>
-                <StatusBadge status={bannerOrder.status} isCustomerView />
+                <div className="flex items-center gap-2 flex-wrap">
+                  <StatusBadge status={bannerOrder.status} isCustomerView />
+                  {awaitingOnlinePayment(bannerOrder) && (
+                    <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-medium bg-amber-400/15 text-amber-300">{isRtl ? 'غير مدفوع' : 'Not paid'}</span>
+                  )}
+                </div>
               </div>
               <span className="flex items-center gap-1 text-[15px] text-link flex-shrink-0">
                 {bannerOrder.status === 'DELAYED' ? t('reorderBtn') : t('trackOrderBtn')}

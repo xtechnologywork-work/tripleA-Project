@@ -215,7 +215,9 @@ export function EmployeeNotifications({
         const before = seen[o.id];
         if (before !== o.status) {
           // The first time an order is seen only records its stage, so nothing old is announced
-          if (before !== undefined) {
+          // Postponing and re-ordering are the customer's own actions: no notification for them
+          const ownAction = o.status === 'DELAYED' || (before === 'DELAYED' && o.status === 'NEW');
+          if (before !== undefined && !ownAction) {
             const ar = langRef.current === 'ar';
             const label = ar ? AR_CUSTOMER_LABELS[o.status] : STATUS_META[o.status].customerLabel;
             const body =
