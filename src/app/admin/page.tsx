@@ -23,7 +23,7 @@ import {
   Employee,
   EmployeeSubscription,
 } from '@/domain/types';
-import { formatDateTime, formatQAR } from '@/lib/utils';
+import { formatDateTime, formatQAR, readyPlace } from '@/lib/utils';
 import { ActorContext, isValidStaffTransition } from '@/domain/status-machine';
 import {
   Search,
@@ -88,7 +88,9 @@ export default function AdminDashboardPage() {
   const [, setAssigneeId] = useState('');
   const [issueDesc] = useState('');
   const [qcNotes] = useState('');
+  // Where the clean car is parked: floor (B3 by default) and the exact bay number
   const [returnOverrideBay, setReturnOverrideBay] = useState('');
+  const [returnFloor, setReturnFloor] = useState('B3');
 
   // Modals state
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
@@ -348,7 +350,8 @@ export default function AdminDashboardPage() {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- sync inputs with selected order
         setAssigneeId(selectedOrder.assignment.memberId);
       }
-      setReturnOverrideBay(selectedOrder.bayCodeSnapshot || '');
+      setReturnOverrideBay('');
+      setReturnFloor('B3');
     }
   }, [selectedOrder?.id]);
 
@@ -406,11 +409,20 @@ export default function AdminDashboardPage() {
           checkedAt: new Date().toISOString(),
         };
       } else if (toStatus === 'RETURNED_TO_PARKING') {
-        const targetBayCode = returnOverrideBay.trim() || target.bayCodeSnapshot;
+        // The washed cars are returned to one floor (B3 by default); the team types the exact bay so the customer can find the car
+        const bayNumber = parseInt(returnOverrideBay.replace(/\D/g, ''), 10);
+        const floor = returnFloor.trim().toUpperCase().slice(0, 6);
+        if (!Number.isInteger(bayNumber) || bayNumber < 1 || bayNumber > TOTAL_BAYS || !floor) {
+          showToast(`Type the floor and the bay number (1 to ${TOTAL_BAYS}) where the car was left`);
+          return;
+        }
+        const targetBayCode = String(bayNumber);
         payload.returnConfirmation = {
-          bayId: target.bayId,
-          matchesOriginalBay: targetBayCode.toUpperCase() === target.bayCodeSnapshot.toUpperCase(),
-          overrideReason: targetBayCode !== target.bayCodeSnapshot ? `Moved to bay ${targetBayCode}` : undefined,
+          floor,
+          bayCode: targetBayCode,
+          bayId: `bay-${targetBayCode}`,
+          matchesOriginalBay: targetBayCode === String(target.bayCodeSnapshot),
+          overrideReason: targetBayCode !== String(target.bayCodeSnapshot) ? `Returned to ${floor}, bay ${targetBayCode}` : undefined,
           confirmedBy: 'Tower Operations Lead',
           confirmedAt: new Date().toISOString(),
         };
@@ -1268,7 +1280,7 @@ export default function AdminDashboardPage() {
                         next = {
                           to: 'RETURNED_TO_PARKING',
                           label: 'Mark ready at bay',
-                          hint: `The car is back at bay ${order.bayCodeSnapshot}. The customer is told it is ready.`,
+                          hint: 'Type where the clean car was left. The customer is told it is ready and sees this place.',
                           open: open4,
                         };
                       } else if (st === 'ISSUE_REPORTED' && order.statusBeforeIssue) {
@@ -1331,7 +1343,7 @@ export default function AdminDashboardPage() {
                                 <div className="rounded-2xl bg-emerald-400/10 p-4 flex items-center gap-3">
                                   <CheckCircle2 className="h-5 w-5 text-emerald-300 flex-shrink-0" />
                                   <p className="text-sm text-emerald-300 font-medium">
-                                    Ready at bay <span className="tabular-nums">{order.bayCodeSnapshot}</span>. The customer has been told.
+                                    Ready at <span className="tabular-nums">{readyPlace(order) ? `${readyPlace(order)!.floor}, bay ${readyPlace(order)!.bay}` : `bay ${order.bayCodeSnapshot}`}</span>. The customer has been told.
                                   </p>
                                 </div>
                               ) : next ? (
@@ -1340,10 +1352,38 @@ export default function AdminDashboardPage() {
                                     <p className="text-xs text-dim">Next step</p>
                                     <p className="text-[15px] font-semibold text-ink mt-0.5">{next.label}</p>
                                     <p className="text-sm text-muted mt-0.5">{next.open ? next.hint : lockHint}</p>
+                                    {next.to === 'RETURNED_TO_PARKING' && next.open && (
+                                      <div className="mt-3 flex items-end gap-2.5">
+                                        <label className="block">
+                                          <span className="text-xs text-dim">Floor</span>
+                                          <input
+                                            value={returnFloor}
+                                            onChange={(e) => setReturnFloor(e.target.value.toUpperCase().slice(0, 6))}
+                                            maxLength={6}
+                                            autoCapitalize="characters"
+                                            className="mt-1 block w-24 rounded-xl bg-fill px-3 py-2.5 text-ink text-[15px] tabular-nums outline-none focus:ring-2 focus:ring-[#0071e3]"
+                                          />
+                                        </label>
+                                        <label className="block">
+                                          <span className="text-xs text-dim">Bay number</span>
+                                          <input
+                                            value={returnOverrideBay}
+                                            onChange={(e) => setReturnOverrideBay(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                                            inputMode="numeric"
+                                            placeholder="e.g. 88"
+                                            className="mt-1 block w-32 rounded-xl bg-fill px-3 py-2.5 text-ink text-[15px] tabular-nums outline-none focus:ring-2 focus:ring-[#0071e3] placeholder:text-dim"
+                                          />
+                                        </label>
+                                      </div>
+                                    )}
                                   </div>
                                   <button
                                     onClick={() => handleTransition(next.to)}
-                                    disabled={!next.open}
+                                    disabled={
+                                      !next.open ||
+                                      (next.to === 'RETURNED_TO_PARKING' &&
+                                        (!returnFloor.trim() || !(parseInt(returnOverrideBay, 10) >= 1 && parseInt(returnOverrideBay, 10) <= TOTAL_BAYS)))
+                                    }
                                     className="w-full md:w-auto md:min-w-[200px] py-3 px-6 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white text-[15px] font-semibold transition active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
                                   >
                                     {next.label}
@@ -1945,7 +1985,7 @@ export default function AdminDashboardPage() {
                         (o) => o.bayCodeSnapshot === code && ACTIVE_BAY_STATES.includes(o.status)
                       );
                       const returnedOrder = orders.find(
-                        (o) => o.bayCodeSnapshot === code && o.status === 'RETURNED_TO_PARKING'
+                        (o) => (o.returnConfirmation?.bayCode || o.bayCodeSnapshot) === code && o.status === 'RETURNED_TO_PARKING'
                       );
 
                       const tone = activeBayOrder

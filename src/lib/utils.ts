@@ -30,6 +30,13 @@ export function plateLabel(plate: string | undefined, lang: UiLang = 'en'): stri
   return plate;
 }
 
+/** Where the clean car was left (floor and bay), once the team has marked it ready. Null before that. */
+export function readyPlace(order: { status: string; returnConfirmation?: { floor?: string; bayCode?: string } }): { floor: string; bay: string } | null {
+  const r = order.returnConfirmation;
+  if (order.status !== 'RETURNED_TO_PARKING' || !r?.bayCode) return null;
+  return { floor: r.floor || 'B3', bay: r.bayCode };
+}
+
 export function formatDateTime(isoString: string, lang: UiLang = 'en'): string {
   try {
     const date = new Date(isoString);

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { mockStore } from '@/data/mock/store';
 import { Order, OrderEvent, OrderPhoto } from '@/domain/types';
-import { formatDateTime, formatQAR, plateLabel, serviceName } from '@/lib/utils';
+import { formatDateTime, formatQAR, plateLabel, readyPlace, serviceName } from '@/lib/utils';
 import { SUPPORT_WHATSAPP } from '@/lib/support';
 import { SafeImage } from '@/components/ui/safe-media';
 import {
@@ -260,9 +260,20 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               <h2 className="text-[26px] md:text-[32px] font-semibold text-ink tracking-tight leading-[1.08]">{getHeadline()}</h2>
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-fill text-sm tabular-nums">
                 <MapPin className="h-4 w-4 text-body" />
-                <span className="text-body">{isRtl ? 'موقف رقم:' : 'Bay:'}</span>
-                <strong className="text-ink text-[14px]">{order.bayCodeSnapshot}</strong>
+                <span className="text-body">
+                  {readyPlace(order) ? (isRtl ? 'سيارتك في:' : 'Your car is at:') : isRtl ? 'موقف رقم:' : 'Bay:'}
+                </span>
+                <strong className="text-ink text-[14px]">
+                  {readyPlace(order) ? `${readyPlace(order)!.floor} · ${isRtl ? 'موقف' : 'Bay'} ${readyPlace(order)!.bay}` : order.bayCodeSnapshot}
+                </strong>
               </div>
+              {readyPlace(order) && (
+                <p className="text-[15px] text-body leading-relaxed">
+                  {isRtl
+                    ? `سيارتك نظيفة وجاهزة في الطابق ${readyPlace(order)!.floor}، الموقف رقم ${readyPlace(order)!.bay}. تم استلامها من الموقف ${order.bayCodeSnapshot}.`
+                    : `Your clean car is on floor ${readyPlace(order)!.floor}, bay ${readyPlace(order)!.bay}. We picked it up from bay ${order.bayCodeSnapshot}.`}
+                </p>
+              )}
             </div>
 
             {isIssue && (
@@ -476,11 +487,19 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               </div>
 
               <div className="flex items-center justify-between gap-3">
-                <dt className="text-muted">{isRtl ? 'موقع الموقف' : 'Parking Bay'}</dt>
+                <dt className="text-muted">{isRtl ? 'استلمناها من الموقف' : 'Picked up from bay'}</dt>
                 <dd className="tabular-nums font-semibold text-ink">
                   {order.bayCodeSnapshot}
                 </dd>
               </div>
+              {readyPlace(order) && (
+                <div className="flex items-center justify-between gap-3">
+                  <dt className="text-muted">{isRtl ? 'سيارتك الآن في' : 'Your car is now at'}</dt>
+                  <dd className="tabular-nums font-semibold text-ink">
+                    {readyPlace(order)!.floor} · {readyPlace(order)!.bay}
+                  </dd>
+                </div>
+              )}
 
               <div className="flex items-center justify-between gap-3 pt-3 border-t border-line">
                 <dt className="text-muted">{isRtl ? 'طريقة الدفع' : 'Payment Mode'}</dt>

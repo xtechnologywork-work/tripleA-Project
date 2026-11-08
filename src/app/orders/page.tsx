@@ -8,7 +8,7 @@ import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
 import { Order } from '@/domain/types';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { formatDateTime, plateLabel } from '@/lib/utils';
+import { formatDateTime, plateLabel, readyPlace } from '@/lib/utils';
 import {
   Car,
   Clock,
@@ -172,7 +172,9 @@ export default function EmployeeOrdersPage() {
                       <div className="flex items-center gap-2.5 flex-wrap">
                         <span className="text-[15px] tabular-nums font-semibold text-ink">{ord.reference}</span>
                         <span className="text-sm tabular-nums text-body bg-fill px-3 py-0.5 rounded-full">
-                          {isRtl ? 'موقف' : 'Bay'} {ord.bayCodeSnapshot}
+                          {readyPlace(ord)
+                            ? `${readyPlace(ord)!.floor} · ${isRtl ? 'موقف' : 'Bay'} ${readyPlace(ord)!.bay}`
+                            : `${isRtl ? 'موقف' : 'Bay'} ${ord.bayCodeSnapshot}`}
                         </span>
                       </div>
 

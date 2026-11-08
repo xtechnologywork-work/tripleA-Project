@@ -188,6 +188,9 @@ export interface Order {
     checkedAt: string;
   };
   returnConfirmation?: {
+    /** Where the clean car was parked: the floor (B3 by default) and the exact bay number */
+    floor?: string;
+    bayCode?: string;
     bayId: string;
     matchesOriginalBay: boolean;
     overrideReason?: string;

@@ -6,6 +6,7 @@ import { mockStore } from '@/data/mock/store';
 import { STATUS_META } from '@/domain/status-machine';
 import { AR_CUSTOMER_LABELS } from '@/components/ui/status-badge';
 import { useLanguage } from '@/context/language-context';
+import { readyPlace } from '@/lib/utils';
 
 type Perm = 'checking' | 'default' | 'granted' | 'denied' | 'unsupported';
 
@@ -220,8 +221,8 @@ export function EmployeeNotifications({
             const body =
               o.status === 'RETURNED_TO_PARKING'
                 ? ar
-                  ? `${label} · موقف ${o.bayCodeSnapshot}`
-                  : `${label} · Bay ${o.bayCodeSnapshot}`
+                  ? `${label} · ${readyPlace(o) ? `${readyPlace(o)!.floor}، موقف ${readyPlace(o)!.bay}` : `موقف ${o.bayCodeSnapshot}`}`
+                  : `${label} · ${readyPlace(o) ? `${readyPlace(o)!.floor}, bay ${readyPlace(o)!.bay}` : `Bay ${o.bayCodeSnapshot}`}`
                 : label;
             void showSystemNotification(`TripleA · ${o.reference}`, body, o.id, `/orders/${o.reference}`);
           }
