@@ -39,6 +39,7 @@ import {
   AlertCircle,
   Smartphone,
   Bell,
+  ImagePlus,
 } from 'lucide-react';
 
 import { EmployeeNotifications } from '@/components/notifications/employee-notifications';
@@ -526,12 +527,16 @@ function BayOrderingClientScreen() {
 
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
     try {
       setPhotoPreview(await compressImage(file));
     } catch {
       setConfirmError(t('photoFailedError'));
+    } finally {
+      // So the same picture can be chosen again after it was removed
+      input.value = '';
     }
   };
 
@@ -1747,24 +1752,31 @@ function BayOrderingClientScreen() {
                     </div>
                   </div>
                 ) : (
-                  <label className="cursor-pointer block">
-                    <div className="rounded-2xl bg-raised hover:bg-raised-strong p-6 text-center transition space-y-3">
-                      <div className="w-12 h-12 mx-auto rounded-full bg-fill flex items-center justify-center">
-                        <Camera className="h-5 w-5 text-ink" />
+                  <>
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Opens the camera */}
+                    <label className="cursor-pointer block">
+                      <div className="rounded-2xl bg-raised hover:bg-raised-strong active:scale-[0.98] p-5 text-center transition space-y-2.5 h-full">
+                        <div className="w-11 h-11 mx-auto rounded-full bg-fill flex items-center justify-center">
+                          <Camera className="h-5 w-5 text-ink" />
+                        </div>
+                        <span className="text-[14px] font-semibold text-ink block">{t('takePhotoBtn')}</span>
                       </div>
-                      <div className="space-y-0.5">
-                        <span className="text-[14px] font-semibold text-ink block">{t('uploadPhotoPrompt')}</span>
-                        <span className="text-sm text-dim block">JPG · PNG · HEIC</span>
+                      <input type="file" accept="image/*" capture="environment" onChange={handlePhotoUpload} className="sr-only" />
+                    </label>
+                    {/* Opens the phone's gallery (a photo taken before) */}
+                    <label className="cursor-pointer block">
+                      <div className="rounded-2xl bg-raised hover:bg-raised-strong active:scale-[0.98] p-5 text-center transition space-y-2.5 h-full">
+                        <div className="w-11 h-11 mx-auto rounded-full bg-fill flex items-center justify-center">
+                          <ImagePlus className="h-5 w-5 text-ink" />
+                        </div>
+                        <span className="text-[14px] font-semibold text-ink block">{t('choosePhotoBtn')}</span>
                       </div>
-                    </div>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      onChange={handlePhotoUpload}
-                      className="sr-only"
-                    />
-                  </label>
+                      <input type="file" accept="image/*" onChange={handlePhotoUpload} className="sr-only" />
+                    </label>
+                  </div>
+                  <p className="text-xs text-dim text-center">JPG · PNG · HEIC</p>
+                  </>
                 )}
               </div>
 
