@@ -103,7 +103,7 @@ export function InspectionFlow({ order, phase, actor, editing = false, onClose, 
   const photos = inspection.media.filter((m) => m.kind === 'PHOTO' && m.angle);
   const video = inspection.media.find((m) => m.kind === 'VIDEO');
   const doneAngles = new Set<InspectionAngle>(photos.map((m) => m.angle as InspectionAngle));
-  const photosComplete = doneAngles.size === INSPECTION_ANGLES.length || !!video;
+  const photosComplete = doneAngles.size >= 1 || !!video;
   const activeInfo = INSPECTION_ANGLES.find((a) => a.key === activeAngle)!;
   const problem = validateInspection(inspection);
 
@@ -356,7 +356,7 @@ export function InspectionFlow({ order, phase, actor, editing = false, onClose, 
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[15px] font-semibold">Or record one video around the car</p>
-                  <p className="text-xs text-dim mt-0.5">Walk once around the car. A video replaces the 8 photos.</p>
+                  <p className="text-xs text-dim mt-0.5">Walk once around the car. A video can be used instead of photos.</p>
                 </div>
               </div>
               <input
@@ -535,7 +535,7 @@ export function InspectionFlow({ order, phase, actor, editing = false, onClose, 
             <button
               onClick={() => {
                 if (step === 'photos' && !photosComplete) {
-                  setError(`Take all ${INSPECTION_ANGLES.length} photos, or record a video`);
+                  setError('Take at least one photo, or record a video');
                   return;
                 }
                 setError('');

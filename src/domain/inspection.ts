@@ -37,10 +37,11 @@ export function requiresPreWashInspection(from: OrderStatus, to: OrderStatus): b
 
 /** The one rule for "is this inspection complete enough to send". Used by the screen, the store and the server. */
 export function validateInspection(i: Inspection): string | null {
-  const photoAngles = new Set(i.media.filter((m) => m.kind === 'PHOTO' && m.angle).map((m) => m.angle));
+  // Any photos count (4 of 8 is enough); the inspection only needs some proof of the car's state, a photo or a video
+  const hasPhoto = i.media.some((m) => m.kind === 'PHOTO');
   const hasVideo = i.media.some((m) => m.kind === 'VIDEO');
-  if (!hasVideo && photoAngles.size < INSPECTION_ANGLES.length) {
-    return `Take all ${INSPECTION_ANGLES.length} photos, or record a video around the car`;
+  if (!hasVideo && !hasPhoto) {
+    return 'Take at least one photo, or record a video around the car';
   }
   if (i.damages.some((d) => !d.photoPath && !d.photoUrl)) {
     return 'Every damage needs a close-up photo';
