@@ -28,8 +28,17 @@ export const LIMITS = {
 /** Seconds before "Send again" opens. */
 export const RESEND_SECONDS = 60;
 
+/**
+ * Who may sign up: only Ministry employees, and their employee numbers follow a fixed pattern.
+ * Checked on the server only, so the rule is not visible in the app. The screen is only told "not allowed".
+ *  1. exactly 8 digits
+ *  2. starts with 69 or 46
+ */
+export const isMinistryEmployeeNo = (v: unknown): boolean => /^(69|46)\d{6}$/.test(String(v ?? ''));
+
 /** What the screen is told. Never the raw Twilio message. */
 export type OtpError =
+  | 'NOT_ALLOWED'
   | 'BAD_PHONE'
   | 'NOT_FOUND'
   | 'EXISTS'

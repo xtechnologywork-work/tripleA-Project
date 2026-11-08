@@ -2,7 +2,7 @@
 // @ts-nocheck -- run with: node --experimental-strip-types --test tests/otp.test.mts
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { qatarMobile, isCode, LIMITS } from '../src/domain/otp.ts';
+import { qatarMobile, isCode, LIMITS, isMinistryEmployeeNo } from '../src/domain/otp.ts';
 import { twilioConfig, twilioError, sendCode, checkCode } from '../src/lib/twilio-verify.ts';
 
 const CONFIG = { accountSid: 'AC' + 'a'.repeat(32), authToken: 'x'.repeat(32), serviceSid: 'VA' + 'b'.repeat(32) };
@@ -104,4 +104,25 @@ test('the sign-up note cannot be changed or reused for another number, and it ex
   // a session token is not a sign-up note
   assert.equal(s.verifyPendingSignup(s.signEmployeeToken('emp-1')), null);
   assert.equal(s.verifyPendingSignup(''), null);
+});
+
+test('only Ministry employee numbers can sign up: 8 digits starting with 69 or 46', () => {
+  for (const ok of ['69123456', '46123456', '69000000', '46999999']) assert.equal(isMinistryEmployeeNo(ok), true, ok);
+  const bad = [
+    '4632432', // 7 digits
+    '691234567', // 9 digits
+    '12345678', // wrong start
+    '59123456',
+    '96123456',
+    '64123456',
+    '6912345a',
+    '69 12345',
+    '69-12345',
+    ' 69123456',
+    '69123456\n',
+    '',
+    undefined,
+    null,
+  ];
+  for (const b of bad) assert.equal(isMinistryEmployeeNo(b), false, String(b));
 });

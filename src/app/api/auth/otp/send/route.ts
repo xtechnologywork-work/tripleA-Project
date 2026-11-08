@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { LIMITS, RESEND_SECONDS, qatarMobile, type OtpError } from '@/domain/otp';
+import { LIMITS, RESEND_SECONDS, qatarMobile, isMinistryEmployeeNo, type OtpError } from '@/domain/otp';
 import { twilioConfig, sendCode, lastTwilioRefusal } from '@/lib/twilio-verify';
 import { underLimits, recordEvents } from '@/lib/otp-limits';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
@@ -39,7 +39,9 @@ export async function POST(req: Request) {
     const fullName = cleanName(body.fullName);
     const employeeNo = cleanEmployeeNo(body.employeeNo);
     if (!validName(fullName)) return fail('BAD_NAME');
-    if (!validEmployeeNo(employeeNo)) return fail('BAD_EMPLOYEE_NO');
+    if (!employeeNo) return fail('BAD_EMPLOYEE_NO');
+    // Only Ministry employee numbers may sign up (the rule stays on the server, the screen is only told "not allowed")
+    if (!isMinistryEmployeeNo(employeeNo) || !validEmployeeNo(employeeNo)) return fail('NOT_ALLOWED', 403);
     if (existing) return fail('EXISTS', 409);
     try {
       pending = signPendingSignup({ phone, fullName, employeeNo });

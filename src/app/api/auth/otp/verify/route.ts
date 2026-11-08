@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { LIMITS, isCode, qatarMobile, type OtpError } from '@/domain/otp';
+import { LIMITS, isCode, qatarMobile, isMinistryEmployeeNo, type OtpError } from '@/domain/otp';
 import { twilioConfig, checkCode } from '@/lib/twilio-verify';
 import { underLimits, recordEvents } from '@/lib/otp-limits';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
@@ -65,6 +65,8 @@ export async function POST(req: Request) {
   const pending = verifyPendingSignup(body.pending);
   if (!pending || pending.phone !== phone) return fail('EXPIRED');
   if (existing) return fail('EXISTS', 409);
+  // The same rule again, right before the account is made
+  if (!isMinistryEmployeeNo(pending.employeeNo)) return fail('NOT_ALLOWED', 403);
   const employee = await createAccount(phone, pending.fullName, pending.employeeNo);
   if (!employee) return fail('FAILED', 500);
   if (body.source === 'qr') await recordQrEvent('signup', deviceOf(ua));

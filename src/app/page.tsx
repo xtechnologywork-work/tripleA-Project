@@ -284,6 +284,7 @@ function BayOrderingClientScreen() {
       SUSPENDED: t('accountSuspendedError'),
       BAD_NAME: t('nameRequiredError'),
       BAD_EMPLOYEE_NO: t('employeeNoRequiredError'),
+      NOT_ALLOWED: t('signUpNotAllowedError'),
       BAD_PHONE: t('phoneError'),
       WRONG_CODE: t('otpWrong'),
       EXPIRED: t('otpExpired'),
