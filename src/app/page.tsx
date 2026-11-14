@@ -9,6 +9,7 @@ import { TOTAL_BAYS } from '@/data/mock/seed';
 import { compressImage } from '@/lib/image';
 import { awaitingOnlinePayment } from '@/domain/analytics';
 import { initialOf } from '@/domain/names';
+import { clockLabel } from '@/domain/ordering';
 import type { ActorContext } from '@/domain/status-machine';
 import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
@@ -492,6 +493,17 @@ function BayOrderingClientScreen() {
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   // A postponed order waits for the customer: it shows in the banner when nothing else is running
   const bannerOrder = activeOrders[0] || employeeOrders.find((o) => o.status === 'DELAYED');
+
+  // Ordering hours: set by the team in the dashboard, checked again by the server on every order
+  const ordering = mockStore.getOrdering();
+  const ordersClosed = ordering !== null && !ordering.accepting;
+  const closedMessage = !ordering
+    ? ''
+    : ordering.reason === 'PAUSED'
+      ? t('orderingPaused')
+      : t('orderingHours')
+          .replace('{from}', clockLabel(ordering.opensAt, isRtl ? 'ar' : 'en'))
+          .replace('{to}', clockLabel(ordering.closesAt, isRtl ? 'ar' : 'en'));
   const registeredVehicle = currentEmployee
     ? mockStore.getEmployeeVehicles(currentEmployee.id)[0]
     : null;
@@ -587,6 +599,7 @@ function BayOrderingClientScreen() {
         BAD_BAY: t('parkingBayRangeError'),
         HAS_PASS: t('payHasPass'),
         TOO_MANY: t('tooManyAttemptsError'),
+        ORDERS_CLOSED: t('orderingClosedTitle'),
         GATEWAY: t('payGatewayError'),
       };
       setConfirmError(errors[data.error] || t('payGatewayError'));
@@ -625,6 +638,10 @@ function BayOrderingClientScreen() {
     if (!selectedPlan) return;
     if (selectedPlan.id === 'subscription-8') {
       handleActivatePass();
+      return;
+    }
+    if (ordersClosed) {
+      setConfirmError(`${t('orderingClosedTitle')}. ${closedMessage}`);
       return;
     }
 
@@ -1106,9 +1123,12 @@ function BayOrderingClientScreen() {
     <div
       role="button"
       tabIndex={0}
-      onClick={() => setSelectedPlan(opts.plan)}
-      onKeyDown={activate(() => setSelectedPlan(opts.plan))}
-      className={`group ${tile} overflow-hidden cursor-pointer flex flex-col hover:bg-tile-hover active:scale-[0.99] transition`}
+      aria-disabled={ordersClosed && opts.plan.id === 'one-time'}
+      onClick={() => !(ordersClosed && opts.plan.id === 'one-time') && setSelectedPlan(opts.plan)}
+      onKeyDown={activate(() => !(ordersClosed && opts.plan.id === 'one-time') && setSelectedPlan(opts.plan))}
+      className={`group ${tile} overflow-hidden flex flex-col transition ${
+        ordersClosed && opts.plan.id === 'one-time' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-tile-hover active:scale-[0.99]'
+      }`}
     >
       <div className="relative h-44 md:h-56 overflow-hidden">
         <Image
@@ -1238,6 +1258,19 @@ function BayOrderingClientScreen() {
 
       <main className="px-4 md:px-8 pt-6 md:pt-8 pb-6">
         <div className="max-w-[1100px] mx-auto space-y-4 md:space-y-5">
+          {/* Orders are closed: the hours, or a pause by the team */}
+          {ordersClosed && (
+            <div role="status" className="rounded-3xl bg-amber-400/10 p-4 md:p-5 flex items-start gap-3.5">
+              <span className="w-10 h-10 rounded-full bg-amber-400/20 flex items-center justify-center flex-shrink-0 text-amber-300">
+                <Clock className="h-5 w-5" />
+              </span>
+              <div className="space-y-0.5">
+                <p className="text-[15px] font-semibold text-amber-300">{t('orderingClosedTitle')}</p>
+                <p className="text-sm text-body leading-relaxed">{closedMessage}</p>
+              </div>
+            </div>
+          )}
+
           {/* The order in progress: one tap to follow it */}
           {bannerOrder && (
             <div className="space-y-2.5">
@@ -1304,7 +1337,8 @@ function BayOrderingClientScreen() {
                       badge: t('mociBenefitBadge'),
                     })
                   }
-                  className={`${primaryBtn} w-full py-3.5 text-[17px] font-normal active:scale-95`}
+                  disabled={ordersClosed}
+                  className={`${primaryBtn} w-full py-3.5 text-[17px] font-normal active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
                   <span>{t('orderWithPassBtn')}</span>
                 </button>
@@ -1591,7 +1625,8 @@ function BayOrderingClientScreen() {
                             badge: t('mociBenefitBadge'),
                           });
                         }}
-                        className={`${primaryBtn} w-full py-3`}
+                        disabled={ordersClosed}
+                        className={`${primaryBtn} w-full py-3 disabled:opacity-40 disabled:cursor-not-allowed`}
                       >
                         <span>{t('confirmOrderBtn')}</span>
                       </button>
@@ -1867,12 +1902,17 @@ function BayOrderingClientScreen() {
             </div>
             )}
 
+            {selectedPlan.id !== 'subscription-8' && ordersClosed && (
+              <p role="alert" className="text-sm text-amber-300 leading-relaxed">
+                {t('orderingClosedTitle')}. {closedMessage}
+              </p>
+            )}
             {selectedPlan.id === 'subscription-8' && !needsPayment && (
               <p role="alert" className="text-sm text-amber-300 leading-relaxed">{t('payUnavailableError')}</p>
             )}
             <button
               onClick={handleConfirmOrder}
-              disabled={isSubmitting || (selectedPlan.id === 'subscription-8' && !needsPayment)}
+              disabled={isSubmitting || (selectedPlan.id === 'subscription-8' && !needsPayment) || (selectedPlan.id !== 'subscription-8' && ordersClosed)}
               className={`${primaryBtn} w-full py-3.5 disabled:opacity-50`}
             >
               <span>

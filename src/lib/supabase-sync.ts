@@ -4,6 +4,7 @@ import { MockDatabase, TOTAL_BAYS } from '../data/mock/seed';
 import { isValidStaffTransition, isCustomerMove } from '../domain/status-machine';
 import { withTitle } from '../domain/names';
 import { myFatoorahConfig } from './myfatoorah';
+import { currentOrdering } from './ordering-settings';
 import { validateInspection, requiresPreWashInspection } from '../domain/inspection';
 import {
   Employee,
@@ -1104,6 +1105,9 @@ async function validateEmployeeBatch(
 ): Promise<{ errors: string[]; fixed: SyncChanges }> {
   const errors: string[] = [];
   const payOnline = onlinePaymentRequired();
+  // Read once, and only when an order is being made
+  const reordering = (changes.orders || []).some((o) => o.status === 'NEW');
+  const ordersOpen = reordering ? (await currentOrdering()).accepting : true;
   const fixed: SyncChanges = { ...changes };
 
   // ---- load what the checks need ----
@@ -1214,6 +1218,7 @@ async function validateEmployeeBatch(
       continue;
     }
     if (!current) {
+      if (!ordersOpen) errors.push(`order ${o.reference}: orders are closed now`);
       const bay = Number(o.bayCodeSnapshot);
       if (o.status !== 'NEW') errors.push(`order ${o.reference}: a new order must start as NEW`);
       if (!Number.isInteger(bay) || bay < 1 || bay > TOTAL_BAYS) errors.push(`order ${o.reference}: bay must be 1 to ${TOTAL_BAYS}`);
@@ -1258,6 +1263,10 @@ async function validateEmployeeBatch(
     }
     // Re-ordering: the car may be parked somewhere else now, so the bay is typed again (and checked)
     const reorder = from === 'DELAYED' && o.status === 'NEW';
+    if (reorder && !ordersOpen) {
+      errors.push(`order ${o.reference}: orders are closed now`);
+      continue;
+    }
     const reorderBay = parseInt(String(o.bayCodeSnapshot ?? ''), 10);
     if (reorder && (!Number.isInteger(reorderBay) || reorderBay < 1 || reorderBay > TOTAL_BAYS)) {
       errors.push(`order ${o.reference}: bay must be 1 to ${TOTAL_BAYS}`);

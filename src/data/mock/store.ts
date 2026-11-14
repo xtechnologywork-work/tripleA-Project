@@ -21,6 +21,7 @@ import {
 import { validateInspection, requiresPreWashInspection, isCleared } from '../../domain/inspection';
 import { ActorContext, hasPermission, getAllowedTransitions, isValidStaffTransition } from '../../domain/status-machine';
 import { withTitle } from '../../domain/names';
+import type { OrderingView } from '../../domain/ordering';
 import { keepFreshLinks } from '@/lib/media-urls';
 
 const STORAGE_KEY = 'cb_supabase_live_v2';
@@ -78,6 +79,7 @@ class MockStore {
   private employeeToken: string | null = null;
   private inspectionEnabled = true; // false until migration_v3_inspection.sql has been run in Supabase
   private paymentsEnabled = false; // true when the server has online payment switched on
+  private ordering: OrderingView | null = null; // can employees order now? null until the first answer
   private authToken: string | null = null;
   private issueListeners: Array<(messages: string[]) => void> = [];
 
@@ -135,6 +137,11 @@ class MockStore {
   }
 
   /** False when the Supabase inspections table does not exist yet: the dashboard then shows a setup message. */
+  /** Can employees place orders right now (hours and switch)? Null until the server has answered. */
+  public getOrdering(): OrderingView | null {
+    return this.ordering;
+  }
+
   /** Online payment (MyFatoorah) is required before a paid wash or a new pass. */
   public isPaymentsEnabled(): boolean {
     return this.paymentsEnabled;
@@ -338,6 +345,18 @@ class MockStore {
         if (data.features) {
           this.inspectionEnabled = data.features.inspection !== false;
           this.paymentsEnabled = data.features.payments === true;
+        }
+        if (data.ordering && typeof data.ordering.accepting === 'boolean') {
+          const o = data.ordering as OrderingView;
+          const changed =
+            !this.ordering ||
+            this.ordering.accepting !== o.accepting ||
+            this.ordering.reason !== o.reason ||
+            this.ordering.open !== o.open ||
+            this.ordering.opensAt !== o.opensAt ||
+            this.ordering.closesAt !== o.closesAt;
+          this.ordering = o;
+          if (changed) this.notify(); // the screens show the new state at once
         }
         if (data.db && (data.source === 'supabase' || !this.db || data.version !== this.lastServerVersion)) {
           // Re-check: a change may have been made while the request was in flight

@@ -50,6 +50,10 @@ Run these in the Supabase SQL editor, in this order, when setting up a new proje
 
 Create the admin user in Supabase Auth and give them the admin role (the end of `migration_v2_lockdown.sql` explains how).
 
+## Ordering hours
+
+In the admin dashboard, **Settings** controls when employees may place orders: a switch (**Open orders** / **Close orders**) and the daily hours in Doha time. Orders are accepted only when the switch is on **and** the time is inside the hours. At first the switch is off, so employees cannot order until the team presses **Open orders**. The server checks it again on every new order and every payment start, so a closed shop cannot be bypassed from a phone. Buying a pass is not an order and stays possible. The settings are one small private file in Supabase Storage (`settings/ordering.json`), so no SQL is needed.
+
 ## Tests and checks
 
 ```bash

@@ -13,6 +13,7 @@ import type { DataSet } from '@/domain/analytics';
 import { awaitingOnlinePayment, reorderTimes } from '@/domain/analytics';
 import { initialOf } from '@/domain/names';
 import { TowerBays } from '@/components/admin/tower-bays';
+import { SettingsPage } from '@/components/admin/settings-page';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
 import { isCleared } from '@/domain/inspection';
@@ -38,6 +39,7 @@ import {
   Users,
   CreditCard,
   TrendingUp,
+  Settings as SettingsIcon,
   MapPin,
   Sparkles,
   Phone,
@@ -55,7 +57,7 @@ import {
   Loader2,
 } from 'lucide-react';
 
-type AdminTab = 'DISPATCH' | 'CLIENTS' | 'SUBSCRIPTIONS' | 'BAYS' | 'QR' | 'INSIGHTS';
+type AdminTab = 'DISPATCH' | 'CLIENTS' | 'SUBSCRIPTIONS' | 'BAYS' | 'QR' | 'INSIGHTS' | 'SETTINGS';
 
 export default function AdminDashboardPage() {
   const { actor } = useAuth();
@@ -733,6 +735,7 @@ export default function AdminDashboardPage() {
     { key: 'BAYS', label: 'Tower Bays', short: 'Bays', icon: <MapPin className="h-[18px] w-[18px]" />, count: null },
     { key: 'QR', label: 'QR Code', short: 'QR', icon: <QrCode className="h-[18px] w-[18px]" />, count: null },
     { key: 'INSIGHTS', label: 'Analytics', short: 'Insights', icon: <TrendingUp className="h-[18px] w-[18px]" />, count: null },
+    { key: 'SETTINGS', label: 'Settings', short: 'Settings', icon: <SettingsIcon className="h-[18px] w-[18px]" />, count: null },
   ];
   const activeNav = navItems.find((n) => n.key === activeTab) || navItems[0];
 
@@ -1093,6 +1096,18 @@ export default function AdminDashboardPage() {
           </div>
 
           <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
+            {mockStore.getOrdering() && (
+              <button
+                onClick={() => setActiveTab('SETTINGS')}
+                title="Ordering hours: open Settings"
+                className={`inline-flex items-center gap-2 text-sm px-2.5 md:px-3 py-1.5 rounded-full whitespace-nowrap transition cursor-pointer ${
+                  mockStore.getOrdering()!.accepting ? 'text-emerald-300 bg-emerald-400/10 hover:bg-emerald-400/20' : 'text-amber-300 bg-amber-400/10 hover:bg-amber-400/20'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${mockStore.getOrdering()!.accepting ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                <span>{mockStore.getOrdering()!.accepting ? 'Orders open' : 'Orders closed'}</span>
+              </button>
+            )}
             <span className="inline-flex items-center gap-2 text-sm text-emerald-300 bg-emerald-400/10 px-2.5 md:px-3 py-1.5 rounded-full whitespace-nowrap" title="Live · Supabase">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               <span className="hidden sm:inline">Live · Supabase</span>
@@ -1136,7 +1151,7 @@ export default function AdminDashboardPage() {
         {/* Key numbers */}
         <div
           className={`flex-shrink-0 px-4 md:px-8 pb-4 md:pb-5 gap-3 ${
-            activeTab === 'INSIGHTS' || activeTab === 'QR' || activeTab === 'BAYS'
+            activeTab === 'INSIGHTS' || activeTab === 'QR' || activeTab === 'BAYS' || activeTab === 'SETTINGS'
               ? 'hidden'
               : mobileDetail && activeTab === 'DISPATCH'
               ? 'hidden min-[1360px]:grid min-[1360px]:grid-cols-6'
@@ -2070,6 +2085,12 @@ export default function AdminDashboardPage() {
           {activeTab === 'QR' && (
             <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
               <QrPage now={clock} />
+            </div>
+          )}
+
+          {activeTab === 'SETTINGS' && (
+            <div className="md:h-full md:overflow-y-auto px-4 md:px-8 pb-10">
+              <SettingsPage onChanged={() => void mockStore.syncFromServer(true)} />
             </div>
           )}
 

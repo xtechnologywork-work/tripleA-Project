@@ -4,6 +4,7 @@ import { rateLimit, clientIp } from '@/lib/rate-limit';
 import { myFatoorahConfig, createPaymentPage } from '@/lib/myfatoorah';
 import { paymentsEnabled, savePayment, createUnpaidOrder, loadForPayment } from '@/lib/payments';
 import { storePaymentPhoto } from '@/lib/supabase-sync';
+import { currentOrdering } from '@/lib/ordering-settings';
 import { isServerSupabaseConfigured } from '@/lib/supabase-server';
 import { cleanDraft, pickPackage, pickService, priceFor, type PayPlan, type PaymentIntent } from '@/domain/payments';
 import { TOTAL_BAYS } from '@/data/mock/seed';
@@ -42,6 +43,8 @@ export async function POST(req: Request) {
   if (!cleaned.ok) return fail(cleaned.error);
   // Buying the pass only is for the pass
   if (cleaned.draft.passOnly && plan !== 'pass') return fail('BAD_REQUEST');
+  // Orders are taken only during the ordering hours (buying a pass is not an order)
+  if (!cleaned.draft.passOnly && !(await currentOrdering()).accepting) return fail('ORDERS_CLOSED', 423);
 
   const id = crypto.randomUUID();
   const draft = cleaned.draft;

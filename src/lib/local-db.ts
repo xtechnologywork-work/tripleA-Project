@@ -54,3 +54,15 @@ export function mergeLocal(changes: Record<string, unknown>): void {
   }
   persistLocal(db);
 }
+
+/** A single saved value (settings) kept next to the local data. */
+export function getLocalValue(key: string): unknown {
+  const db = getLocalDb();
+  return db ? db[key] : undefined;
+}
+
+export function setLocalValue(key: string, value: unknown): void {
+  const db = getLocalDb() || {};
+  db[key] = value;
+  persistLocal(db);
+}

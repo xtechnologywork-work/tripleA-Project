@@ -7,6 +7,7 @@ import { mockStore } from '@/data/mock/store';
 import { Order, OrderEvent, OrderPhoto } from '@/domain/types';
 import { formatDateTime, formatQAR, plateLabel, readyPlace, serviceName } from '@/lib/utils';
 import { SUPPORT_WHATSAPP } from '@/lib/support';
+import { clockLabel } from '@/domain/ordering';
 import { TOTAL_BAYS } from '@/data/mock/seed';
 import { SafeImage } from '@/components/ui/safe-media';
 import {
@@ -189,8 +190,24 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
   };
 
   // Re-order: back in the queue, at the bay where the car is parked now, with no second payment
+  const ordering = mockStore.getOrdering();
+  const ordersClosed = ordering !== null && !ordering.accepting;
+  const closedText = !ordering
+    ? ''
+    : ordering.reason === 'PAUSED'
+      ? isRtl
+        ? 'استقبال الطلبات متوقف مؤقتاً من الفريق. حاول لاحقاً.'
+        : 'The team has paused orders for now. Please try again later.'
+      : isRtl
+        ? `الطلبات مغلقة الآن. نستقبل الطلبات يومياً من ${clockLabel(ordering.opensAt, 'ar')} إلى ${clockLabel(ordering.closesAt, 'ar')}.`
+        : `Ordering is closed right now. Orders are taken every day from ${clockLabel(ordering.opensAt, 'en')} to ${clockLabel(ordering.closesAt, 'en')}.`;
+
   const handleReorder = () => {
     if (moving) return;
+    if (ordersClosed) {
+      setReorderError(closedText);
+      return;
+    }
     const bay = (reorderBay ?? order.bayCodeSnapshot).replace(/\D/g, '');
     const n = parseInt(bay, 10);
     if (!Number.isInteger(n) || n < 1 || n > TOTAL_BAYS) {
@@ -371,9 +388,14 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                     {reorderError}
                   </p>
                 )}
+                {ordersClosed && (
+                  <p role="status" className="text-sm text-amber-300 leading-relaxed">
+                    {closedText}
+                  </p>
+                )}
                 <button
                   onClick={handleReorder}
-                  disabled={moving}
+                  disabled={moving || ordersClosed}
                   className="w-full py-3.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white text-[16px] font-semibold transition active:scale-95 disabled:opacity-60"
                 >
                   {isRtl ? 'إعادة الطلب' : 'Re-order'}

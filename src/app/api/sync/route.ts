@@ -5,6 +5,7 @@ import { verifyEmployeeToken } from '@/lib/employee-session';
 import { getLocalDb, getLocalVersion, mergeLocal } from '@/lib/local-db';
 import { paymentsEnabled } from '@/lib/payments';
 import { withTitle } from '@/domain/names';
+import { currentOrdering } from '@/lib/ordering-settings';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // a compressed photo plus the rows around it
 
@@ -42,6 +43,7 @@ export async function GET(req: Request) {
             version: remote.version,
             source: 'supabase',
             features: { inspection: remote.inspectionEnabled, payments: paymentsEnabled() },
+            ordering: await currentOrdering(),
             role: identity.admin ? 'admin' : identity.employeeId ? 'employee' : 'public',
             timestamp: Date.now(),
           },
@@ -60,7 +62,7 @@ export async function GET(req: Request) {
   const local = getLocalDb();
   const shown = local && Array.isArray(local.employees) ? { ...local, employees: local.employees.map((e) => ({ ...e, fullName: withTitle(e.fullName) })) } : local;
   return NextResponse.json(
-    { db: shown, version: getLocalVersion(), source: 'local', features: { inspection: true, payments: paymentsEnabled() }, timestamp: Date.now() },
+    { db: shown, version: getLocalVersion(), source: 'local', features: { inspection: true, payments: paymentsEnabled() }, ordering: await currentOrdering(), timestamp: Date.now() },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }
