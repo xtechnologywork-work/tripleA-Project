@@ -1916,7 +1916,7 @@ export default function AdminDashboardPage() {
                               </td>
 
                               <td className="py-3.5 px-5 text-body">
-                                <span className="truncate max-w-[200px] block">
+                                <span className="truncate max-w-[150px] block">
                                   {emp.company || 'Ministry of Commerce & Industry'}
                                 </span>
                               </td>
@@ -1947,13 +1947,14 @@ export default function AdminDashboardPage() {
                                   <button
                                     onClick={() => void toggleVip(emp)}
                                     disabled={vipBusy === emp.id}
-                                    className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm transition cursor-pointer whitespace-nowrap disabled:opacity-50 ${
-                                      emp.vip ? 'bg-amber-400 hover:bg-amber-300 text-black font-semibold' : 'bg-fill hover:bg-fill-strong text-ink'
+                                    className={`w-8 h-8 rounded-full transition cursor-pointer flex items-center justify-center flex-shrink-0 disabled:opacity-50 ${
+                                      emp.vip ? 'bg-amber-400 hover:bg-amber-300 text-black' : 'bg-fill hover:bg-fill-strong text-body'
                                     }`}
-                                    title={emp.vip ? 'Remove VIP' : 'Make this client VIP'}
+                                    title={emp.vip ? 'VIP client: click to remove VIP' : 'Make this client VIP'}
+                                    aria-label={emp.vip ? 'Remove VIP' : 'Make VIP'}
+                                    aria-pressed={!!emp.vip}
                                   >
-                                    <Crown className="h-3.5 w-3.5" />
-                                    {emp.vip ? 'VIP' : 'Make VIP'}
+                                    <Crown className="h-4 w-4" />
                                   </button>
                                   <button
                                     onClick={() => setCreditModalClient(emp)}
