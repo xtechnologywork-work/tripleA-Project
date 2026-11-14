@@ -52,7 +52,7 @@ Create the admin user in Supabase Auth and give them the admin role (the end of 
 
 ## Ordering hours
 
-In the admin dashboard, **Settings** controls when employees may place orders: a switch (**Open orders** / **Close orders**) and the daily hours in Doha time. Orders are accepted only when the switch is on **and** the time is inside the hours. At first the switch is off, so employees cannot order until the team presses **Open orders**. The server checks it again on every new order and every payment start, so a closed shop cannot be bypassed from a phone. Buying a pass is not an order and stays possible. The settings are one small private file in Supabase Storage (bucket `app-settings`, file `settings/ordering.json`), so no SQL is needed.
+In the admin dashboard, **Settings** controls when employees may place orders: a switch (**Open orders** / **Close orders**) and the daily hours in Doha time (a closing time earlier than the opening time means the window runs past midnight, for example 7:00 PM to 12:15 AM). Orders are accepted only when the switch is on **and** the time is inside the hours. At first the switch is off, so employees cannot order until the team presses **Open orders**. The server checks it again on every new order and every payment start, so a closed shop cannot be bypassed from a phone. Buying a pass is not an order and stays possible. The settings are one small private file in Supabase Storage (bucket `app-settings`, file `settings/ordering.json`), so no SQL is needed.
 
 ## VIP clients
 

@@ -4,6 +4,8 @@
  * Orders are accepted only when BOTH are true:
  *  - the switch is on (the team pressed "Open orders"), and
  *  - the time in Doha is inside the daily window (from opensAt, up to but not including closesAt).
+ *    A closing time earlier than the opening time means the window runs past midnight (a night shift,
+ *    for example 7:00 PM to 12:15 AM).
  *
  * Nothing is set at first: the switch is off, so every employee account is closed until the team opens it.
  */
@@ -52,7 +54,8 @@ export const dohaClock = (nowMs: number): string => {
 
 /**
  * Checks what the team typed. Returns the clean settings, or the problem.
- * Missing fields keep their current value; the opening time must be before the closing time.
+ * Missing fields keep their current value; the two times must be different (a closing time earlier than the
+ * opening time is fine: the window then runs past midnight).
  */
 export function cleanOrdering(
   input: unknown,
@@ -65,7 +68,7 @@ export function cleanOrdering(
   if (typeof open !== 'boolean') return { ok: false, error: 'The switch must be on or off' };
   if (typeof opensAt !== 'string' || !HHMM.test(opensAt)) return { ok: false, error: 'The opening time is not valid' };
   if (typeof closesAt !== 'string' || !HHMM.test(closesAt)) return { ok: false, error: 'The closing time is not valid' };
-  if (minutesOf(opensAt) >= minutesOf(closesAt)) return { ok: false, error: 'The opening time must be before the closing time' };
+  if (minutesOf(opensAt) === minutesOf(closesAt)) return { ok: false, error: 'The opening and closing times cannot be the same' };
   return { ok: true, settings: { open, opensAt, closesAt } };
 }
 
@@ -80,11 +83,14 @@ export function orderingStatus(settings: OrderingSettings, nowMs: number): Order
   const now = dohaMinutes(nowMs);
   const from = minutesOf(settings.opensAt);
   const to = minutesOf(settings.closesAt);
+  // Same day: from <= now < to. Past midnight (closing earlier than opening): open from the opening time to midnight, and from midnight to the closing time.
+  const inside = from < to ? now >= from && now < to : now >= from || now < to;
   let reason: OrderingReason;
   if (!settings.open) reason = 'PAUSED';
-  else if (now < from) reason = 'BEFORE_OPENING';
-  else if (now >= to) reason = 'AFTER_CLOSING';
-  else reason = 'OPEN';
+  else if (inside) reason = 'OPEN';
+  // Closed: before the opening time (the same day), or past the closing time
+  else if (from < to && now >= to) reason = 'AFTER_CLOSING';
+  else reason = 'BEFORE_OPENING';
   return { ...settings, accepting: reason === 'OPEN', reason, dohaNow: dohaClock(nowMs) };
 }
 

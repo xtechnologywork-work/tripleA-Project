@@ -94,7 +94,9 @@ export function SettingsPage({ onChanged }: { onChanged?: () => void }) {
     }
   };
 
-  const hoursValid = /^\d\d:\d\d$/.test(opensAt) && /^\d\d:\d\d$/.test(closesAt) && opensAt < closesAt;
+  // The times just have to be different: a closing time earlier than the opening time means it closes after midnight
+  const hoursValid = /^\d\d:\d\d$/.test(opensAt) && /^\d\d:\d\d$/.test(closesAt) && opensAt !== closesAt;
+  const pastMidnight = hoursValid && closesAt < opensAt;
   const hoursChanged = !!view && (opensAt !== view.opensAt || closesAt !== view.closesAt);
   const text = view ? REASON_TEXT(view) : null;
   const on = view?.open === true;
@@ -175,7 +177,12 @@ export function SettingsPage({ onChanged }: { onChanged?: () => void }) {
           </label>
         </div>
 
-        {!hoursValid && <p className="text-sm text-amber-300">The opening time must be before the closing time.</p>}
+        {!hoursValid && <p className="text-sm text-amber-300">The opening and closing times cannot be the same.</p>}
+        {pastMidnight && (
+          <p className="text-sm text-body leading-relaxed">
+            Closes after midnight: orders are open from {clockLabel(opensAt, 'en')} until {clockLabel(closesAt, 'en')} the next day.
+          </p>
+        )}
         {error && (
           <p role="alert" className="text-sm text-rose-300">
             {error}

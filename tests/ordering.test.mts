@@ -47,8 +47,9 @@ test('what the team types is checked', () => {
   assert.equal(cleanOrdering({ opensAt: '25:00' }).ok, false);
   assert.equal(cleanOrdering({ closesAt: '12:60' }).ok, false);
   assert.equal(cleanOrdering({ open: 'yes' }).ok, false);
-  assert.equal(cleanOrdering({ opensAt: '15:15', closesAt: '07:00' }).ok, false);
   assert.equal(cleanOrdering({ opensAt: '09:00', closesAt: '09:00' }).ok, false);
+  // a closing time earlier than the opening time is a window past midnight
+  assert.equal(cleanOrdering({ opensAt: '19:00', closesAt: '00:15' }).ok, true);
 });
 
 test('a change keeps the fields that were not sent', () => {
@@ -68,4 +69,25 @@ test('hours are written for people to read', () => {
   assert.equal(clockLabel('12:00', 'en'), '12:00 PM');
   assert.equal(clockLabel('15:15', 'ar'), '3:15 م');
   assert.equal(clockLabel('07:00', 'ar'), '7:00 ص');
+});
+
+test('a window past midnight: 7:00 PM to 12:15 AM', () => {
+  const night = { open: true, opensAt: '19:00', closesAt: '00:15' };
+  const s = (t) => orderingStatus(night, at(t));
+  assert.equal(s('18:59').accepting, false);
+  assert.equal(s('18:59').reason, 'BEFORE_OPENING');
+  assert.equal(s('19:00').accepting, true);
+  assert.equal(s('23:59').accepting, true);
+  assert.equal(s('00:00').accepting, true);
+  assert.equal(s('00:14').accepting, true);
+  assert.equal(s('00:15').accepting, false);
+  assert.equal(s('07:00').accepting, false);
+  assert.equal(s('12:00').accepting, false);
+  // the switch still closes everything
+  assert.equal(orderingStatus({ ...night, open: false }, at('20:00')).accepting, false);
+});
+
+test('a normal day window still closes after the closing time with the right reason', () => {
+  assert.equal(orderingStatus(ON, at('20:00')).reason, 'AFTER_CLOSING');
+  assert.equal(orderingStatus(ON, at('05:00')).reason, 'BEFORE_OPENING');
 });
