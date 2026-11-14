@@ -74,15 +74,10 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
     fetchOrder();
     const unsubscribe = mockStore.subscribe(fetchOrder);
     
-    // Cross-device sync (polls server every 1000ms for live phone/PC sync)
-    const interval = setInterval(async () => {
-      await mockStore.syncFromServer();
-      fetchOrder();
-    }, 1000);
-
+    // The store already asks the server every few seconds (and the moment the screen is seen again) and tells us
+    // when something changed: this page does not ask a second time.
     return () => {
       unsubscribe();
-      clearInterval(interval);
     };
   }, [reference]);
 

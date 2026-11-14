@@ -9,7 +9,7 @@ const noStore = { headers: { 'Cache-Control': 'no-store' } };
  * through, and makes the order if it did. Nothing the browser says about the payment is trusted.
  */
 export async function POST(req: Request) {
-  if (!rateLimit(`pay-confirm:${clientIp(req)}`, 30, 60_000)) {
+  if (!rateLimit(`pay-confirm:${clientIp(req)}`, 600, 60_000)) {
     return NextResponse.json({ status: 'ERROR', error: 'TOO_MANY' }, { status: 429 });
   }
   let body: { paymentId?: string; paymentRef?: string };

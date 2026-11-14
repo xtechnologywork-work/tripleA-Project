@@ -137,13 +137,18 @@ export async function loadForPayment(employeeId: string, orderId?: string): Prom
   };
 }
 
-async function makeReference(db: MockDatabase | null, createdAt: string): Promise<string> {
-  if (onSupabase()) return nextReference(getServerSupabase()!, createdAt);
+/** The next order number in the local demo data. Read at the moment it is used, with nothing awaited before the order is saved, so two orders cannot take the same number. */
+function localReference(createdAt: string): string {
   const prefix = `CB-${createdAt.substring(2, 4)}${createdAt.substring(5, 7)}${createdAt.substring(8, 10)}`;
-  const last = ((db?.orders as Order[] | undefined) || [])
+  const last = (((getLocalDb()?.orders as Order[] | undefined) || []) as Order[])
     .filter((o) => o.reference.startsWith(`${prefix}-`))
     .reduce((max, o) => Math.max(max, parseInt(o.reference.split('-').pop() || '0', 10) || 0), 0);
   return `${prefix}-${String(last + 1).padStart(4, '0')}`;
+}
+
+/** The next order number on Supabase (a clash with another phone is fixed when the order is saved). Local: read at the last moment. */
+async function makeReference(createdAt: string): Promise<string | null> {
+  return onSupabase() ? nextReference(getServerSupabase()!, createdAt) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +234,7 @@ export async function createUnpaidOrder(intent: PaymentIntent, data?: PayData): 
     if (!employee || !service) return null;
 
     const now = new Date().toISOString();
-    let reference = await makeReference(d.localDb ?? null, now);
+    let reference = (await makeReference(now)) ?? localReference(now);
     const f = buildFulfillment({ intent, employee, service, pkg: pickPackage(d.packages), activePass: null, reference, now, paid: false });
     if (onSupabase()) {
       const result = await applyChanges({ orders: [f.order], orderEvents: f.events, photos: f.photos }, { admin: true });
@@ -322,7 +327,7 @@ async function fulfill(intent: PaymentIntent): Promise<string> {
   const activePass = d.activeSubscriptions.find((x) => x.employeeId === employee.id && x.id !== ids.subscription) || null;
 
   const now = new Date().toISOString();
-  let reference = await makeReference(d.localDb ?? null, now);
+  let reference = (await makeReference(now)) ?? localReference(now);
   const f = buildFulfillment({ intent, employee, service, pkg: pickPackage(d.packages), activePass, reference, now });
 
   if (onSupabase()) {

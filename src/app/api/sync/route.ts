@@ -29,15 +29,31 @@ function readState(fresh: boolean) {
   return promise;
 }
 
+// An employee's screen reads only that employee's rows. A short answer per person is shared between their open screens.
+const scopedCache = new Map<string, { at: number; promise: ReturnType<typeof fetchSupabaseState> }>();
+
+function readScoped(employeeId: string | undefined, fresh: boolean) {
+  const key = employeeId || '-';
+  const hit = scopedCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.promise;
+  const promise = fetchSupabaseState({ employeeId });
+  scopedCache.set(key, { at: Date.now(), promise });
+  if (scopedCache.size > 500) {
+    for (const [k, v] of scopedCache) if (Date.now() - v.at > 10_000) scopedCache.delete(k);
+  }
+  return promise;
+}
+
 export async function GET(req: Request) {
   const fresh = new URL(req.url).searchParams.get('fresh') === '1';
 
   if (isServerSupabaseConfigured()) {
     try {
-      const remote = await readState(fresh);
+      // Who is asking decides what is read: the dashboard reads everything, an employee only their own rows
+      const identity = await identityOf(req);
+      const remote = identity.admin ? await readState(fresh) : await readScoped(identity.employeeId, fresh);
       if (remote && remote.db) {
-        // Each caller only receives what they are allowed to see
-        const identity = await identityOf(req);
+        // Each caller only receives what they are allowed to see (checked again here, whatever was read)
         return NextResponse.json(
           {
             db: scopeState(remote.db, identity),

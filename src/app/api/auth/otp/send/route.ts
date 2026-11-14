@@ -15,7 +15,7 @@ const fail = (error: OtpError, status = 400) => NextResponse.json({ error }, { s
 export async function POST(req: Request) {
   const ip = clientIp(req);
   // A first quick brake on this machine; the real limits below are kept in the database
-  if (!rateLimit(`otp-send:${ip}`, 20, 60_000)) return fail('TOO_MANY', 429);
+  if (!rateLimit(`otp-send:${ip}`, 300, 60_000)) return fail('TOO_MANY', 429);
 
   let body: { action?: string; phone?: string; fullName?: string; employeeNo?: string; lang?: string };
   try {

@@ -80,6 +80,7 @@ class MockStore {
   private inspectionEnabled = true; // false until migration_v3_inspection.sql has been run in Supabase
   private paymentsEnabled = false; // true when the server has online payment switched on
   private ordering: OrderingView | null = null; // can employees order now? null until the first answer
+  private lastChangeAt = Date.now(); // when the data last changed: polling slows down when nothing happens for a while
   private authToken: string | null = null;
   private issueListeners: Array<(messages: string[]) => void> = [];
 
@@ -109,10 +110,22 @@ class MockStore {
       // Initial server sync from live Supabase
       this.syncFromServer();
 
-      // Background cross-device polling
-      setInterval(() => {
-        this.syncFromServer();
-      }, 1500);
+      // Background cross-device polling. Every open screen asks the server, so it is kept light:
+      // a screen nobody is looking at (a hidden tab, a locked phone) does not ask at all, and asks again the moment it is seen.
+      // Every few seconds while things are moving; slower once nothing has changed for a while.
+      const poll = () => {
+        if (!(typeof document !== 'undefined' && document.hidden)) void this.syncFromServer();
+        setTimeout(poll, Date.now() - this.lastChangeAt > 90_000 ? 8000 : 3000);
+      };
+      setTimeout(poll, 3000);
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) {
+            this.lastChangeAt = Date.now(); // seen again: fast for a while
+            void this.syncFromServer();
+          }
+        });
+      }
     }
   }
 
@@ -356,7 +369,10 @@ class MockStore {
             this.ordering.opensAt !== o.opensAt ||
             this.ordering.closesAt !== o.closesAt;
           this.ordering = o;
-          if (changed) this.notify(); // the screens show the new state at once
+          if (changed) {
+            this.lastChangeAt = Date.now();
+            this.notify(); // the screens show the new state at once
+          }
         }
         if (data.db && (data.source === 'supabase' || !this.db || data.version !== this.lastServerVersion)) {
           // Re-check: a change may have been made while the request was in flight
@@ -369,6 +385,7 @@ class MockStore {
           this.lastServerJson = serialized;
           if (unchanged) return; // same data as a moment ago: no re-render, no rewrite
           this.db = data.db;
+          this.lastChangeAt = Date.now();
           this.baselineLoaded = true;
           this.markAllSynced(this.db!);
           this.saveLocalMirror();
@@ -425,6 +442,7 @@ class MockStore {
 
   private saveToStorage(): void {
     if (typeof window === 'undefined' || !this.db) return;
+    this.lastChangeAt = Date.now(); // the person just did something: stay on the fast polling for a while
     this.saveLocalMirror();
     try {
       if (this.channel) {

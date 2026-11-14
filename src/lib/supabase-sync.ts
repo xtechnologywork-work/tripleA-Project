@@ -6,6 +6,7 @@ import { withTitle } from '../domain/names';
 import { myFatoorahConfig } from './myfatoorah';
 import { currentOrdering } from './ordering-settings';
 import { loadVipIds } from './vip-settings';
+import { saveOrdersWithRetry } from './reference-retry';
 import { validateInspection, requiresPreWashInspection } from '../domain/inspection';
 import {
   Employee,
@@ -224,12 +225,57 @@ export async function fetchPaymentContext(
   }
 }
 
-export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version: number; inspectionEnabled: boolean } | null> {
+/** An employee's screen shows their latest orders: enough for any real history, and a short list of ids to read the rest by. */
+const SCOPED_ORDER_LIMIT = 100;
+
+// The price list and the parking zones are the same for everyone and almost never change: one read serves every employee for a short while
+type CatalogueRes = { data: Row[] | null; error: { message: string } | null };
+let catalogueCache: { at: number; promise: Promise<CatalogueRes[]> } | null = null;
+const CATALOGUE_MS = 15_000;
+
+function readCatalogue(sb: SupabaseClient): Promise<CatalogueRes[]> {
+  if (catalogueCache && Date.now() - catalogueCache.at < CATALOGUE_MS) return catalogueCache.promise;
+  const promise = Promise.all([
+    sb.from('services').select('*'),
+    sb.from('subscription_packages').select('*'),
+    sb.from('parking_zones').select('*'),
+  ]).then((rows) => {
+    // A read that failed is not kept
+    if (rows.some((r) => r.error)) catalogueCache = null;
+    return rows as unknown as CatalogueRes[];
+  });
+  catalogueCache = { at: Date.now(), promise };
+  return promise;
+}
+
+/**
+ * Reads the state from Supabase.
+ * - No `scope`: everything (the admin dashboard).
+ * - `scope`: only what that person may see. An employee reads their own rows and the price list; nobody signed in
+ *   reads only the price list. Far lighter than reading the whole database on every screen refresh.
+ */
+export async function fetchSupabaseState(scope?: {
+  employeeId?: string;
+}): Promise<{ db: MockDatabase; version: number; inspectionEnabled: boolean } | null> {
   const sb = getServerSupabase();
   if (!sb) return null;
 
   try {
     const vipPromise = loadVipIds(); // read at the same time as the tables
+
+    type Res = { data: Row[] | null; error: { message: string } | null };
+    const nothing = (): Promise<Res> => Promise.resolve({ data: [], error: null });
+    const scoped = !!scope;
+    const me = scope?.employeeId;
+
+    // A scoped read starts with the employee's own orders: the photos, events and inspections are read by those orders
+    const ownOrders: Res | null = scoped && me
+      ? ((await sb.from('orders').select('*').eq('employee_id', me).order('created_at', { ascending: false }).limit(SCOPED_ORDER_LIMIT)) as unknown as Res)
+      : null;
+    const ownIds = (ownOrders?.data || []).map((o) => String(o.id));
+    const catalogue = scoped ? readCatalogue(sb) : null;
+    const byOrder = (table: string): Promise<Res> => (ownIds.length ? (sb.from(table).select('*').in('order_id', ownIds) as unknown as Promise<Res>) : nothing());
+
     const [
       empsRes,
       vehsRes,
@@ -245,22 +291,34 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       issuesRes,
       auditRes,
       inspectionRes,
-    ] = await Promise.all([
-      sb.from('employees').select('*').order('created_at', { ascending: false }),
-      sb.from('vehicles').select('*'),
-      sb.from('orders').select('*').order('created_at', { ascending: false }),
-      sb.from('services').select('*'),
-      sb.from('subscription_packages').select('*'),
-      sb.from('employee_subscriptions').select('*'),
-      sb.from('credit_ledger').select('*').order('created_at', { ascending: true }),
-      sb.from('field_team_members').select('*'),
-      sb.from('parking_zones').select('*'),
-      sb.from('order_photos').select('*'),
-      sb.from('order_events').select('*').order('created_at', { ascending: true }),
-      sb.from('issues').select('*').order('created_at', { ascending: false }),
-      sb.from('audit_logs').select('*').not('action', 'like', 'qr.%').order('created_at', { ascending: false }).limit(300),
-      sb.from('inspections').select('*').order('started_at', { ascending: true }),
-    ]);
+    ] = (await Promise.all([
+      scoped ? (me ? sb.from('employees').select('*').eq('id', me) : nothing()) : sb.from('employees').select('*').order('created_at', { ascending: false }),
+      scoped ? (me ? sb.from('vehicles').select('*').eq('employee_id', me) : nothing()) : sb.from('vehicles').select('*'),
+      scoped ? Promise.resolve(ownOrders ?? { data: [], error: null }) : sb.from('orders').select('*').order('created_at', { ascending: false }),
+      scoped ? catalogue!.then((c) => c[0]) : sb.from('services').select('*'),
+      scoped ? catalogue!.then((c) => c[1]) : sb.from('subscription_packages').select('*'),
+      scoped ? (me ? sb.from('employee_subscriptions').select('*').eq('employee_id', me) : nothing()) : sb.from('employee_subscriptions').select('*'),
+      scoped
+        ? me
+          ? sb.from('credit_ledger').select('*').eq('employee_id', me).order('created_at', { ascending: true })
+          : nothing()
+        : sb.from('credit_ledger').select('*').order('created_at', { ascending: true }),
+      scoped ? nothing() : sb.from('field_team_members').select('*'),
+      scoped ? catalogue!.then((c) => c[2]) : sb.from('parking_zones').select('*'),
+      scoped ? byOrder('order_photos') : sb.from('order_photos').select('*'),
+      scoped
+        ? ownIds.length
+          ? sb.from('order_events').select('*').in('order_id', ownIds).order('created_at', { ascending: true })
+          : nothing()
+        : sb.from('order_events').select('*').order('created_at', { ascending: true }),
+      scoped ? nothing() : sb.from('issues').select('*').order('created_at', { ascending: false }),
+      scoped ? nothing() : sb.from('audit_logs').select('*').not('action', 'like', 'qr.%').order('created_at', { ascending: false }).limit(300),
+      scoped
+        ? ownIds.length
+          ? sb.from('inspections').select('*').in('order_id', ownIds).eq('status', 'SUBMITTED').order('started_at', { ascending: true })
+          : sb.from('inspections').select('id').limit(1) // only to learn whether inspections exist
+        : sb.from('inspections').select('*').order('started_at', { ascending: true }),
+    ])) as unknown as Res[];
     const inspectionEnabled = !inspectionRes.error;
     inspectionSchema = { ready: inspectionEnabled, checkedAt: Date.now() };
     const vipIds = await vipPromise;
@@ -944,8 +1002,19 @@ export async function applyChanges(input: SyncChanges, identity: Identity): Prom
           }
           return base;
         });
-        const { error } = await sb.from('orders').upsert(rows, { onConflict: 'id' });
-        if (error) throw new Error(`orders: ${error.message}`);
+        // Two phones ordering in the same moment can pick the same order number: the database accepts the first and
+        // refuses the second. The second order gets a new number and is saved again, so no order is lost.
+        await saveOrdersWithRetry({
+          upsert: async (batch) => ({ error: (await sb.from('orders').upsert(batch, { onConflict: 'id' })).error }),
+          freshReference: (createdAt) => nextReference(sb, createdAt),
+          rows,
+          isNew: (id) => !existing.has(id),
+          onFixed: (id, reference) => {
+            result.referenceFixes[id] = reference;
+            const order = accepted.find((o) => o.id === id);
+            if (order) order.reference = reference;
+          },
+        });
       }
     }
 

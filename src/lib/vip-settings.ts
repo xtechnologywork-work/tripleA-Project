@@ -17,6 +17,9 @@ const CACHE_MS = 5000;
 const MAX_VIP = 2000;
 
 let cache: { ids: Set<string>; at: number } | null = null;
+let inFlight: Promise<Set<string>> | null = null;
+/** Counts saves: a read that started before a save must not put its older answer in the cache */
+let saves = 0;
 
 const onSupabase = () => isServerSupabaseConfigured() && !!getServerSupabase();
 
@@ -24,10 +27,17 @@ const cleanIds = (raw: unknown): string[] =>
   Array.isArray(raw) ? Array.from(new Set(raw.filter((x): x is string => typeof x === 'string' && /^[\w-]{1,80}$/.test(x)))).slice(0, MAX_VIP) : [];
 
 /** The ids of the VIP employees. A read that fails keeps the last answer (or none). */
-export async function loadVipIds(): Promise<Set<string>> {
+export function loadVipIds(): Promise<Set<string>> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_MS) return cache.ids;
+  if (cache && now - cache.at < CACHE_MS) return Promise.resolve(cache.ids);
+  // Everybody asking while a read is under way shares that one read
+  if (!inFlight) inFlight = readVipIds().finally(() => (inFlight = null));
+  return inFlight;
+}
 
+async function readVipIds(): Promise<Set<string>> {
+  const now = Date.now();
+  const savesAtStart = saves;
   let ids = cache?.ids ?? new Set<string>();
   try {
     if (onSupabase()) {
@@ -41,7 +51,7 @@ export async function loadVipIds(): Promise<Set<string>> {
   } catch (err) {
     console.error('Reading the VIP list failed:', err);
   }
-  cache = { ids, at: now };
+  if (saves === savesAtStart) cache = { ids, at: now };
   return ids;
 }
 
@@ -50,6 +60,8 @@ export async function setVip(employeeId: string, vip: boolean): Promise<Set<stri
   if (!/^[\w-]{1,80}$/.test(employeeId)) return null;
   // Read fresh: two changes made close together must not undo each other
   cache = null;
+  inFlight = null;
+  saves += 1;
   const ids = new Set(await loadVipIds());
   if (vip) ids.add(employeeId);
   else ids.delete(employeeId);

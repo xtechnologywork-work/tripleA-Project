@@ -17,14 +17,24 @@ const LOCAL_KEY = 'orderingSettings';
 const CACHE_MS = 5000;
 
 let cache: { value: OrderingSettings; at: number } | null = null;
+let inFlight: Promise<OrderingSettings> | null = null;
+/** Counts saves: a read that started before a save must not put its older answer in the cache */
+let saves = 0;
 
 const onSupabase = () => isServerSupabaseConfigured() && !!getServerSupabase();
 
 /** The saved settings. Nothing saved (or damaged): closed for everyone. A read that fails keeps the last answer. */
-export async function loadOrdering(): Promise<OrderingSettings> {
+export function loadOrdering(): Promise<OrderingSettings> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_MS) return cache.value;
+  if (cache && now - cache.at < CACHE_MS) return Promise.resolve(cache.value);
+  // Everybody asking while a read is under way shares that one read
+  if (!inFlight) inFlight = readOrderingFile().finally(() => (inFlight = null));
+  return inFlight;
+}
 
+async function readOrderingFile(): Promise<OrderingSettings> {
+  const now = Date.now();
+  const savesAtStart = saves;
   let value: OrderingSettings = cache?.value ?? { ...DEFAULT_ORDERING };
   try {
     if (onSupabase()) {
@@ -39,12 +49,14 @@ export async function loadOrdering(): Promise<OrderingSettings> {
   } catch (err) {
     console.error('Reading the ordering hours failed:', err);
   }
-  cache = { value, at: now };
+  if (saves === savesAtStart) cache = { value, at: now };
   return value;
 }
 
 /** Saves the settings. Returns false when they could not be saved. */
 export async function saveOrdering(settings: OrderingSettings): Promise<boolean> {
+  saves += 1;
+  inFlight = null;
   try {
     if (onSupabase()) {
       const sb = getServerSupabase()!;

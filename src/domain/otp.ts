@@ -20,7 +20,8 @@ export const isCode = (code: string) => /^\d{6}$/.test(String(code || ''));
 /** How many messages and checks are allowed. Kept low: every message costs money. */
 export const LIMITS = {
   sendPerPhone: { max: 3, windowMs: 10 * 60 * 1000 },
-  sendPerDevice: { max: 10, windowMs: 60 * 60 * 1000 },
+  // One office shares one internet address: 30 colleagues signing in at once must not block each other (the phone and daily limits still protect the cost)
+  sendPerDevice: { max: 200, windowMs: 60 * 60 * 1000 },
   sendPerDay: { max: 500, windowMs: 24 * 60 * 60 * 1000 },
   checkPerPhone: { max: 10, windowMs: 10 * 60 * 1000 },
 } as const;

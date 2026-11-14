@@ -26,10 +26,12 @@ function siteUrl(req: Request): string {
  */
 export async function POST(req: Request) {
   if (!paymentsEnabled()) return fail('PAYMENTS_OFF', 503);
-  if (!rateLimit(`pay-start:${clientIp(req)}`, 10, 60_000)) return fail('TOO_MANY', 429);
+  // One office shares one internet address: the wide limit is per address, the tight one per employee
+  if (!rateLimit(`pay-start-ip:${clientIp(req)}`, 300, 60_000)) return fail('TOO_MANY', 429);
 
   const employeeId = verifyEmployeeToken(req.headers.get('x-employee-token'));
   if (!employeeId) return fail('SIGN_IN', 401);
+  if (!rateLimit(`pay-start:${employeeId}`, 10, 60_000)) return fail('TOO_MANY', 429);
 
   let body: Record<string, unknown>;
   try {
