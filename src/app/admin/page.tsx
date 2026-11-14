@@ -330,6 +330,20 @@ export default function AdminDashboardPage() {
   const reorderedAt = useMemo(() => reorderTimes(mockStore.getDb().orderEvents), [orders, lastSyncTime]);
   const queuedAt = (o: Order) => reorderedAt.get(o.id) ?? new Date(o.createdAt).getTime();
 
+  // One row per customer: their current pass (the active one, or the latest), with the earlier passes counted under it
+  const passRows = useMemo(() => {
+    const byEmployee = new Map<string, EmployeeSubscription[]>();
+    for (const s of subscriptions) byEmployee.set(s.employeeId, [...(byEmployee.get(s.employeeId) || []), s]);
+    const time = (s: EmployeeSubscription) => new Date(s.activatedAt || 0).getTime() || 0;
+    return Array.from(byEmployee.values())
+      .map((list) => {
+        const sorted = [...list].sort((a, b) => time(b) - time(a));
+        const current = sorted.find((s) => s.status === 'ACTIVE') || sorted[0];
+        return { sub: current, earlier: sorted.filter((s) => s.id !== current.id) };
+      })
+      .sort((a, b) => Number(b.sub.status === 'ACTIVE') - Number(a.sub.status === 'ACTIVE') || time(b.sub) - time(a.sub));
+  }, [subscriptions]);
+
   // The tower shows real orders only: one still waiting for its online payment is not a car to pick up yet
   const towerOrders = useMemo(() => orders.filter((o) => !awaitingOnlinePayment(o)), [orders]);
 
@@ -518,7 +532,8 @@ export default function AdminDashboardPage() {
     if (!Number.isInteger(left) || left < 0 || left > 99) return setEsError('Washes left must be a whole number from 0 to 99');
     if (esForm.expiry && Number.isNaN(new Date(esForm.expiry).getTime())) return setEsError('End date is not valid');
     const current = mockStore.getCreditBalance(editSub.employeeId);
-    if (left !== current && esForm.reason.trim().length < 3) return setEsError('Write a short reason for changing the washes left');
+    const ending = editSub.status === 'ACTIVE' && esForm.status !== 'ACTIVE';
+    if (!ending && left !== current && esForm.reason.trim().length < 3) return setEsError('Write a short reason for changing the washes left');
 
     try {
       const emp = employees.find((e) => e.id === editSub.employeeId);
@@ -533,8 +548,12 @@ export default function AdminDashboardPage() {
         },
         staffActor
       );
-      if (left !== current) {
-        mockStore.adjustCredit(editSub.employeeId, left - current, esForm.reason.trim(), staffActor);
+      // A pass that just ended already had its unused washes removed; otherwise set the washes left as typed
+      // Decided before saving: the pass object is changed in place by the save
+      const ended = ending;
+      const afterStatus = mockStore.getCreditBalance(editSub.employeeId);
+      if (!ended && left !== afterStatus) {
+        mockStore.adjustCredit(editSub.employeeId, left - afterStatus, esForm.reason.trim() || 'Washes left set by the team', staffActor);
       }
       showToast(`Saved changes for ${name}`);
       setEditSub(null);
@@ -800,8 +819,8 @@ export default function AdminDashboardPage() {
       }
     }
     if (dialog.kind === 'cancelSub' && dialog.subId) {
-      mockStore.cancelSubscription(dialog.subId);
-      showToast('Subscription cancelled');
+      mockStore.cancelSubscription(dialog.subId, staffActor);
+      showToast('Pass cancelled');
       reloadData();
     }
     closeDialog();
@@ -842,7 +861,7 @@ export default function AdminDashboardPage() {
     },
     cancelSub: {
       title: 'Cancel this pass?',
-      body: 'The client loses the pass. Washes already used stay in the history.',
+      body: 'The client loses the pass and its unused washes. Washes already used stay in the history.',
       label: '',
       placeholder: '',
       confirm: 'Cancel pass',
@@ -1917,14 +1936,14 @@ export default function AdminDashboardPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-line">
-                      {subscriptions.length === 0 ? (
+                      {passRows.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="p-14 text-center text-dim">
                             No corporate subscriptions recorded yet.
                           </td>
                         </tr>
                       ) : (
-                        subscriptions.map((sub) => {
+                        passRows.map(({ sub, earlier }) => {
                           const client = employees.find((e) => e.id === sub.employeeId);
                           const balance = client ? mockStore.getCreditBalance(client.id) : 0;
 
@@ -1936,6 +1955,14 @@ export default function AdminDashboardPage() {
                                   <span>{sub.id}</span>
                                   {client?.employeeNo && <span>Employee no: {client.employeeNo}</span>}
                                 </div>
+                                {earlier.length > 0 && (
+                                  <span className="block mt-1 text-xs text-dim">
+                                    {earlier.length} earlier {earlier.length === 1 ? 'pass' : 'passes'}:{' '}
+                                    {earlier
+                                      .map((e) => `${e.status.toLowerCase()} ${e.activatedAt ? formatDateTime(e.activatedAt).split(',')[0] : ''}`.trim())
+                                      .join(', ')}
+                                  </span>
+                                )}
                               </td>
                               <td className="py-3.5 px-5 tabular-nums text-body">{client?.phone || 'N/A'}</td>
                               <td className="py-3.5 px-5 text-body">140 QAR Corporate Package (6 + 2 Free = 8 Washes)</td>

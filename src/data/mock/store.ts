@@ -525,6 +525,10 @@ class MockStore {
     const before = { status: sub.status, expiresAt: sub.expiresAt };
     if (updates.status) sub.status = updates.status;
     if (updates.expiresAt !== undefined) sub.expiresAt = updates.expiresAt || undefined;
+    // A pass that ends (cancelled or expired) takes its unused washes with it
+    if (before.status === 'ACTIVE' && sub.status !== 'ACTIVE') {
+      this.removeUnusedWashes(sub, `Pass ${sub.status === 'EXPIRED' ? 'expired' : 'cancelled'}`, actor.id);
+    }
     db.auditLogs.unshift({
       id: uid('aud'),
       actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
@@ -538,13 +542,46 @@ class MockStore {
     return sub;
   }
 
-  public cancelSubscription(subscriptionId: string): void {
+  public cancelSubscription(subscriptionId: string, actor?: ActorContext): void {
     const db = this.getDb();
     const sub = db.subscriptions.find((s) => s.id === subscriptionId);
-    if (sub) {
-      sub.status = 'CANCELLED';
-      this.saveToStorage();
-    }
+    if (!sub || sub.status === 'CANCELLED') return;
+    const wasActive = sub.status === 'ACTIVE';
+    sub.status = 'CANCELLED';
+    const removed = wasActive ? this.removeUnusedWashes(sub, 'Pass cancelled', actor?.id || 'staff') : 0;
+    db.auditLogs.unshift({
+      id: uid('aud'),
+      actor: { type: actor?.type || 'STAFF', id: actor?.id || 'staff', email: actor?.email, role: actor?.role },
+      action: 'subscription.cancel',
+      entityType: 'SUBSCRIPTION',
+      entityId: sub.id,
+      details: { employeeId: sub.employeeId, unusedWashesRemoved: removed },
+      createdAt: new Date().toISOString(),
+    });
+    this.saveToStorage();
+  }
+
+  /**
+   * When a pass ends, the washes left on it are taken off the balance (a dated entry in the ledger, so the history
+   * shows why). Otherwise they would be added to the next pass (5 left + a new 8 = 13).
+   * Nothing is removed while the employee still has another active pass.
+   */
+  private removeUnusedWashes(sub: EmployeeSubscription, why: string, actorId: string): number {
+    const db = this.getDb();
+    if (db.subscriptions.some((s) => s.employeeId === sub.employeeId && s.id !== sub.id && s.status === 'ACTIVE')) return 0;
+    const left = this.getCreditBalance(sub.employeeId);
+    if (left <= 0) return 0;
+    db.credits.push({
+      id: uid('crd-end'),
+      employeeId: sub.employeeId,
+      subscriptionId: sub.id,
+      type: 'ADJUSTMENT',
+      delta: -left,
+      reason: `${why}: ${left} unused ${left === 1 ? 'wash' : 'washes'} removed`,
+      actorId,
+      createdAt: new Date().toISOString(),
+    });
+    return left;
   }
 
   public createOrder(
