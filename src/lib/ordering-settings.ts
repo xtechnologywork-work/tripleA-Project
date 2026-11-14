@@ -2,14 +2,15 @@
  * Ordering hours on the server: where they are kept, and the answer to "can an employee order now?".
  * Server only.
  *
- * On Supabase the settings are one small private file in storage (settings/ordering.json), so no SQL is needed.
+ * On Supabase the settings are one small private file in storage (bucket app-settings, file settings/ordering.json), so no SQL is needed.
  * Without Supabase (the local demo) they are kept with the other local data.
  */
 import { getServerSupabase, isServerSupabaseConfigured } from './supabase-server';
 import { getLocalValue, setLocalValue } from './local-db';
 import { DEFAULT_ORDERING, orderingStatus, readOrdering, type OrderingSettings, type OrderingView } from '@/domain/ordering';
 
-const BUCKET = 'order-photos';
+// A bucket of its own: the photo bucket only accepts images, so it refuses these small settings files
+const BUCKET = 'app-settings';
 const PATH = 'settings/ordering.json';
 const LOCAL_KEY = 'orderingSettings';
 /** Read again after this long: a change by the team reaches every employee within seconds */

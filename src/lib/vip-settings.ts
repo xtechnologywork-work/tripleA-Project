@@ -1,13 +1,14 @@
 /**
  * VIP clients on the server: which employees the team marked as VIP. Server only.
  *
- * On Supabase the list is one small private file in storage (settings/vip.json), so no SQL is needed.
+ * On Supabase the list is one small private file in storage (bucket app-settings, file settings/vip.json), so no SQL is needed.
  * Without Supabase (the local demo) it is kept with the other local data.
  */
 import { getServerSupabase, isServerSupabaseConfigured } from './supabase-server';
 import { getLocalValue, setLocalValue } from './local-db';
 
-const BUCKET = 'order-photos';
+// A bucket of its own: the photo bucket only accepts images, so it refuses these small settings files
+const BUCKET = 'app-settings';
 const PATH = 'settings/vip.json';
 const LOCAL_KEY = 'vipEmployees';
 /** Read again after this long: a change by the team reaches every screen within seconds */
