@@ -608,25 +608,17 @@ function BayOrderingClientScreen() {
       setConfirmError(t('genericAuthError'));
       return;
     }
-    setConfirmError('');
-    setIsSubmitting(true);
-    if (needsPayment) {
-      startPayment('').catch(() => {
-        setConfirmError(t('payGatewayError'));
-        setIsSubmitting(false);
-      });
+    // The pass is activated only after it is paid online: without online payment it cannot be bought here
+    if (!needsPayment) {
+      setConfirmError(t('payUnavailableError'));
       return;
     }
-    try {
-      mockStore.activateSubscriptionForEmployee(currentEmployee.id);
-      setRefreshTrigger((prev) => prev + 1);
-      setSelectedPlan(null);
-      setFlash(t('passActiveFlash'));
-    } catch {
-      setConfirmError(t('genericAuthError'));
-    } finally {
+    setConfirmError('');
+    setIsSubmitting(true);
+    startPayment('').catch(() => {
+      setConfirmError(t('payGatewayError'));
       setIsSubmitting(false);
-    }
+    });
   };
 
   const handleConfirmOrder = () => {
@@ -671,11 +663,6 @@ function BayOrderingClientScreen() {
         name: currentEmployee.fullName,
         email: currentEmployee.email,
       };
-      // A new 8-wash pass is granted first, so the credit it pays with exists when the order is created
-      if (selectedPlan.id === 'subscription-8') {
-        mockStore.activateSubscriptionForEmployee(currentEmployee.id);
-        setRefreshTrigger((prev) => prev + 1);
-      }
       const bay = mockStore.getOrCreateBay(cleanBay);
       const service = mockStore.getServices()[0];
       const finalPlate = plateNumber.trim() || registeredVehicle?.plateNumber || 'Photo Verified';
@@ -1880,9 +1867,12 @@ function BayOrderingClientScreen() {
             </div>
             )}
 
+            {selectedPlan.id === 'subscription-8' && !needsPayment && (
+              <p role="alert" className="text-sm text-amber-300 leading-relaxed">{t('payUnavailableError')}</p>
+            )}
             <button
               onClick={handleConfirmOrder}
-              disabled={isSubmitting}
+              disabled={isSubmitting || (selectedPlan.id === 'subscription-8' && !needsPayment)}
               className={`${primaryBtn} w-full py-3.5 disabled:opacity-50`}
             >
               <span>
@@ -1893,7 +1883,7 @@ function BayOrderingClientScreen() {
                   : needsPayment
                   ? `${t('payNowBtn')} · ${selectedPlan.price} ${t('qar')}`
                   : selectedPlan.id === 'subscription-8'
-                  ? t('activateSubNowBtn')
+                  ? `${t('payNowBtn')} · ${selectedPlan.price} ${t('qar')}`
                   : parkingBayInput.trim()
                   ? `${t('confirmOrderBtn')} ${parkingBayInput.trim()} · ${selectedPlan.price} ${t('qar')}`
                   : `${t('confirmOrderBtn')} · ${selectedPlan.price} ${t('qar')}`}

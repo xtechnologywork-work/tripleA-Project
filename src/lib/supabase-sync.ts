@@ -1289,7 +1289,7 @@ async function validateEmployeeBatch(
     if (subOwners.has(x.id) && subOwners.get(x.id) !== me) errors.push('pass: not yours');
   }
   const newSubs = (changes.subscriptions || []).filter((x) => !subOwners.has(x.id));
-  if (payOnline && newSubs.length > 0) errors.push('pass: a pass is activated after the online payment');
+  if (newSubs.length > 0) errors.push('pass: a pass is activated after the online payment');
   const hasActiveInDb = dbSubs.some((d) => String(d.status) === 'ACTIVE');
   for (const sub of newSubs) {
     if (sub.employeeId !== me) errors.push('pass: not yours');
@@ -1331,8 +1331,8 @@ async function validateEmployeeBatch(
         errors.push('credit: this refund is not valid');
       }
     } else if (c.type === 'GRANT') {
-      const forNewPass = !!c.subscriptionId && newSubs.some((x) => x.id === c.subscriptionId);
-      if (c.delta !== 8 || !forNewPass || payOnline) errors.push('credit: this grant is not valid');
+      // Washes are granted by a confirmed payment or by the team, never by the customer's own request
+      errors.push('credit: this grant is not valid');
     } else {
       errors.push('credit: only staff can adjust credits');
     }
