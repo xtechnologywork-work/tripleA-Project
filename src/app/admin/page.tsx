@@ -118,7 +118,7 @@ export default function AdminDashboardPage() {
   const [clientPanelId, setClientPanelId] = useState<string | null>(null);
 
   // In-app dialogs (replace the browser's confirm / prompt boxes)
-  type AdminDialog = { kind: 'cancel' | 'qc' | 'issue' | 'cancelSub' | 'skipInspection'; subId?: string } | null;
+  type AdminDialog = { kind: 'cancel' | 'qc' | 'issue' | 'cancelSub' | 'skipInspection' | 'markPaid'; subId?: string } | null;
   const [dialog, setDialog] = useState<AdminDialog>(null);
   const [dialogText, setDialogText] = useState('');
 
@@ -818,6 +818,15 @@ export default function AdminDashboardPage() {
         showToast(err instanceof Error ? err.message : 'Could not skip the inspection');
       }
     }
+    if (dialog.kind === 'markPaid' && selectedOrder) {
+      try {
+        mockStore.markOrderPaid(selectedOrder.id, staffActor);
+        showToast(`${selectedOrder.reference} is marked as paid`);
+        reloadData();
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Could not mark the order as paid');
+      }
+    }
     if (dialog.kind === 'cancelSub' && dialog.subId) {
       mockStore.cancelSubscription(dialog.subId, staffActor);
       showToast('Pass cancelled');
@@ -858,6 +867,16 @@ export default function AdminDashboardPage() {
       placeholder: 'e.g. Phone camera is broken',
       confirm: 'Skip and unlock',
       tone: 'warning',
+    },
+    markPaid: {
+      title: 'Mark this order as paid?',
+      body: selectedOrder
+        ? `Use this when the customer paid you ${formatQAR(selectedOrder.priceSnapshot?.amountMinor || 0)} directly. The order counts as paid and the team can work on it. If the customer also pays online, refund that payment in MyFatoorah.`
+        : '',
+      label: '',
+      placeholder: '',
+      confirm: 'Mark as paid',
+      tone: 'primary',
     },
     cancelSub: {
       title: 'Cancel this pass?',
@@ -1277,6 +1296,14 @@ export default function AdminDashboardPage() {
                         </div>
                       </div>
 
+                      {selectedOrder.paymentStatus === 'UNPAID' && selectedOrder.paymentMode === 'ONE_TIME' && selectedOrder.status !== 'CANCELLED' && (
+                        <button
+                          onClick={() => setDialog({ kind: 'markPaid' })}
+                          className="px-4 py-2 rounded-full bg-emerald-400/15 hover:bg-emerald-400/25 text-emerald-300 text-sm font-medium transition cursor-pointer whitespace-nowrap"
+                        >
+                          Mark as paid
+                        </button>
+                      )}
                       {canGo('CANCELLED') && (
                         <button
                           onClick={() => setDialog({ kind: 'cancel' })}
@@ -1683,12 +1710,18 @@ export default function AdminDashboardPage() {
                             const delayed = ev.type === 'DELAYED';
                             const reordered = ev.type === 'REORDERED';
                             const collected = ev.type === 'COLLECTED';
+                            const paid = ev.type === 'PAID';
                             const bay = typeof ev.payload?.bay === 'string' ? ev.payload.bay : '';
                             return (
                               <li key={ev.id} className="flex items-center gap-3 text-sm">
                                 <span className={`w-2 h-2 rounded-full flex-shrink-0 ${delayed || reordered ? 'bg-orange-400' : 'bg-[#2997ff]'}`} />
                                 <span className="flex-1 text-muted min-w-0">
-                                  {collected ? (
+                                  {paid ? (
+                                    <>
+                                      <strong className="text-emerald-300 font-semibold">Marked as paid by the team</strong>
+                                      {typeof ev.payload?.by === 'string' ? ` · ${ev.payload.by}` : ''}
+                                    </>
+                                  ) : collected ? (
                                     <strong className="text-emerald-300 font-semibold">Owner collected the car</strong>
                                   ) : delayed ? (
                                     <>

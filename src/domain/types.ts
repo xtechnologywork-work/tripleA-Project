@@ -225,7 +225,7 @@ export interface OrderEvent {
   orderId: string;
   from?: OrderStatus;
   to?: OrderStatus;
-  type: 'CREATED' | 'STATUS_CHANGED' | 'ASSIGNED' | 'REASSIGNED' | 'NOTE' | 'PHOTO_ADDED' | 'ISSUE' | 'QC' | 'RETURNED' | 'DELAYED' | 'REORDERED' | 'COLLECTED';
+  type: 'CREATED' | 'STATUS_CHANGED' | 'ASSIGNED' | 'REASSIGNED' | 'NOTE' | 'PHOTO_ADDED' | 'ISSUE' | 'QC' | 'RETURNED' | 'DELAYED' | 'REORDERED' | 'COLLECTED' | 'PAID';
   actor: {
     type: PrincipalType;
     id: string;

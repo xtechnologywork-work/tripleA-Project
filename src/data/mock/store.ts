@@ -655,6 +655,44 @@ class MockStore {
     return newOrder;
   }
 
+  /**
+   * The team received the money for a single wash that was not paid (cash, or a payment made some other way).
+   * The order becomes paid, counts as revenue, and the team can work on it. Recorded in the timeline and the audit log.
+   */
+  public markOrderPaid(orderId: string, actor: ActorContext): Order {
+    if (!hasPermission(actor, 'orders.status.update')) throw new Error('Unauthorized to mark an order as paid');
+    const db = this.getDb();
+    const order = db.orders.find((o) => o.id === orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status === 'CANCELLED') throw new Error('This order was cancelled');
+    if (order.paymentMode !== 'ONE_TIME') throw new Error('Only a single wash can be marked as paid. A pass is activated by its payment.');
+    if (order.paymentStatus !== 'UNPAID') throw new Error('This order is already paid');
+
+    const now = new Date().toISOString();
+    order.paymentStatus = 'PAID_OFFLINE';
+    order.updatedAt = now;
+    order.version += 1;
+    db.orderEvents.push({
+      id: uid('evt'),
+      orderId,
+      type: 'PAID',
+      actor: { type: actor.type, id: actor.id, name: actor.name },
+      payload: { amountMinor: order.priceSnapshot?.amountMinor, by: actor.email || actor.name || actor.id },
+      createdAt: now,
+    });
+    db.auditLogs.unshift({
+      id: uid('aud'),
+      actor: { type: actor.type, id: actor.id, email: actor.email, role: actor.role },
+      action: 'order.paid',
+      entityType: 'ORDER',
+      entityId: orderId,
+      details: { reference: order.reference, amountMinor: order.priceSnapshot?.amountMinor },
+      createdAt: now,
+    });
+    this.saveToStorage();
+    return order;
+  }
+
   /** The team saw the owner take a washed car: it leaves the "ready" list. Recorded in the order's timeline with the exact time. */
   public markCollected(orderId: string, actor: ActorContext): void {
     const db = this.getDb();

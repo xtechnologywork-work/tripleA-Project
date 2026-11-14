@@ -594,7 +594,7 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
                       ? `من الباقة · ${order.creditsUsed} غسلة`
                       : `Wash pass · ${order.creditsUsed} wash`
                     : formatQAR(order.priceSnapshot?.amountMinor || 0, lang)}
-                  {order.paymentStatus === 'PAID_ONLINE' && (
+                  {(order.paymentStatus === 'PAID_ONLINE' || order.paymentStatus === 'PAID_OFFLINE') && (
                     <span className="ms-2 text-xs font-medium text-emerald-400">{isRtl ? 'مدفوع' : 'Paid'}</span>
                   )}
                   {order.paymentStatus === 'UNPAID' && (
