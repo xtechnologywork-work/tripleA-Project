@@ -30,6 +30,8 @@ export interface PaymentDraft {
   /** "storage:<path>" for a photo kept in private storage, or a data link in local demo mode */
   photo?: string;
   lang: 'ar' | 'en';
+  /** Buying the wash pass only: no order is made, the 8 washes are ordered later */
+  passOnly?: boolean;
 }
 
 export type PaymentStatus = 'PENDING' | 'PAID' | 'FULFILLED' | 'FAILED';
@@ -58,6 +60,10 @@ export function cleanDraft(
   input: Record<string, unknown>,
   totalBays: number
 ): { ok: true; draft: PaymentDraft } | { ok: false; error: string } {
+  // Buying the pass only needs nothing from the customer: no bay, no photo
+  if (input.passOnly === true) {
+    return { ok: true, draft: { bay: '', passOnly: true, lang: input.lang === 'ar' ? 'ar' : 'en' } };
+  }
   const bayNumber = parseInt(String(input.bay ?? '').replace(/\D/g, ''), 10);
   if (!Number.isInteger(bayNumber) || bayNumber < 1 || bayNumber > totalBays) return { ok: false, error: 'BAD_BAY' };
   const text = (v: unknown, max: number) => String(v ?? '').trim().slice(0, max);
@@ -108,6 +114,52 @@ export function fulfillmentIds(intentId: string) {
     grant: `crd-pay-${intentId}-grant`,
     debit: `crd-pay-${intentId}-debit`,
   };
+}
+
+/**
+ * Buying the pass only: the pass (8 washes) and nothing else, no order. If the employee already has an active
+ * pass (bought twice at the same time), the washes are added to it. Same ids as the payment, so it never doubles.
+ */
+export function buildPassOnly(args: {
+  intent: PaymentIntent;
+  employee: Employee;
+  pkg: SubscriptionPackage | null;
+  activePass: EmployeeSubscription | null;
+  now: string;
+}): { subscriptions: EmployeeSubscription[]; credits: CreditLedgerEntry[] } {
+  const { intent, employee, pkg, activePass, now } = args;
+  if (!pkg) throw new Error('No pass package');
+  const ids = fulfillmentIds(intent.id);
+  const washes = pkg.paidWashes + pkg.bonusWashes;
+  const subscriptions: EmployeeSubscription[] = [];
+  let passId = activePass?.id;
+  if (!activePass) {
+    passId = ids.subscription;
+    const days = pkg.validityDays ?? 60;
+    subscriptions.push({
+      id: ids.subscription,
+      employeeId: employee.id,
+      packageId: pkg.id,
+      packageSnapshot: pkg,
+      status: 'ACTIVE',
+      activatedAt: now,
+      expiresAt: new Date(new Date(now).getTime() + days * 24 * 60 * 60 * 1000).toISOString(),
+      activatedBy: 'online-payment',
+    });
+  }
+  const credits: CreditLedgerEntry[] = [
+    {
+      id: ids.grant,
+      employeeId: employee.id,
+      subscriptionId: passId,
+      type: 'GRANT',
+      delta: washes,
+      reason: `Wash pass paid online (${washes} washes)`,
+      actorId: 'system',
+      createdAt: now,
+    },
+  ];
+  return { subscriptions, credits };
 }
 
 export interface Fulfillment {

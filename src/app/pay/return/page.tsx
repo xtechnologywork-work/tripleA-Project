@@ -7,7 +7,7 @@ import { CheckCircle2, Loader2, XCircle, AlertTriangle } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { mockStore } from '@/data/mock/store';
 
-type State = 'checking' | 'paid' | 'failed' | 'error';
+type State = 'checking' | 'paid' | 'paidPass' | 'failed' | 'error';
 
 /**
  * MyFatoorah sends the customer back here after paying. The server checks the payment with MyFatoorah and
@@ -39,8 +39,9 @@ function PaymentReturn() {
         });
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
-        if (data.status === 'PAID' && data.reference) {
-          setState('paid');
+        if (data.status === 'PAID' && (data.reference || data.passOnly)) {
+          // A pass bought on its own has no order: the pass shows on the home page
+          setState(data.passOnly ? 'paidPass' : 'paid');
           try {
             sessionStorage.removeItem('triplea_payment_ref');
           } catch {
@@ -48,7 +49,7 @@ function PaymentReturn() {
           }
           // Bring the new order onto this device, then show it
           await mockStore.syncFromServer(true).catch(() => undefined);
-          setTimeout(() => router.replace(`/orders/${data.reference}`), 900);
+          setTimeout(() => router.replace(data.passOnly ? '/' : `/orders/${data.reference}`), data.passOnly ? 1600 : 900);
           return;
         }
         if (data.status === 'FAILED') {
@@ -81,6 +82,7 @@ function PaymentReturn() {
   const view = {
     checking: { icon: <Loader2 className="h-12 w-12 text-ink animate-spin" />, title: t('payCheckingTitle'), body: t('payCheckingBody') },
     paid: { icon: <CheckCircle2 className="h-12 w-12 text-emerald-400" />, title: t('paySuccessTitle'), body: t('paySuccessBody') },
+    paidPass: { icon: <CheckCircle2 className="h-12 w-12 text-emerald-400" />, title: t('paySuccessPassTitle'), body: t('paySuccessPassBody') },
     failed: { icon: <XCircle className="h-12 w-12 text-rose-400" />, title: t('payFailedTitle'), body: t('payFailedBody') },
     error: { icon: <AlertTriangle className="h-12 w-12 text-amber-300" />, title: t('payErrorTitle'), body: t('payErrorBody') },
   }[state];

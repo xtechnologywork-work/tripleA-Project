@@ -3,6 +3,7 @@ import { getServerSupabase, hasServiceKey } from './supabase-server';
 import { MockDatabase, TOTAL_BAYS } from '../data/mock/seed';
 import { isValidStaffTransition, isCustomerMove } from '../domain/status-machine';
 import { withTitle } from '../domain/names';
+import { myFatoorahConfig } from './myfatoorah';
 import { validateInspection, requiresPreWashInspection } from '../domain/inspection';
 import {
   Employee,
@@ -1093,12 +1094,16 @@ export async function applyChanges(input: SyncChanges, identity: Identity): Prom
 // -----------------------------------------------------------------------------
 const MAX_PHOTO_CHARS = 4_200_000; // about 3 MB of image
 
+/** With online payment on, a pass and a paid wash come only from a confirmed payment: a request cannot make them. */
+const onlinePaymentRequired = () => process.env.PAYMENTS_ENABLED === 'true' && !!myFatoorahConfig();
+
 async function validateEmployeeBatch(
   sb: SupabaseClient,
   changes: SyncChanges,
   me: string
 ): Promise<{ errors: string[]; fixed: SyncChanges }> {
   const errors: string[] = [];
+  const payOnline = onlinePaymentRequired();
   const fixed: SyncChanges = { ...changes };
 
   // ---- load what the checks need ----
@@ -1217,6 +1222,7 @@ async function validateEmployeeBatch(
       const priceOk = servicePrices.has(amount) || (o.paymentMode === 'CREDIT' && packagePrices.has(amount));
       if (!priceOk) errors.push(`order ${o.reference}: price does not match`);
       if (!['ONE_TIME', 'CREDIT'].includes(o.paymentMode)) errors.push(`order ${o.reference}: payment mode is not valid`);
+      if (payOnline && o.paymentMode === 'ONE_TIME') errors.push(`order ${o.reference}: a paid wash is made after the online payment`);
       if (!(o.creditsUsed >= 0 && o.creditsUsed <= 1)) errors.push(`order ${o.reference}: credits used is not valid`);
       if ((o.instructions || '').length > 500) errors.push(`order ${o.reference}: notes are too long`);
       if (o.paymentMode === 'CREDIT') {
@@ -1283,6 +1289,7 @@ async function validateEmployeeBatch(
     if (subOwners.has(x.id) && subOwners.get(x.id) !== me) errors.push('pass: not yours');
   }
   const newSubs = (changes.subscriptions || []).filter((x) => !subOwners.has(x.id));
+  if (payOnline && newSubs.length > 0) errors.push('pass: a pass is activated after the online payment');
   const hasActiveInDb = dbSubs.some((d) => String(d.status) === 'ACTIVE');
   for (const sub of newSubs) {
     if (sub.employeeId !== me) errors.push('pass: not yours');
@@ -1325,7 +1332,7 @@ async function validateEmployeeBatch(
       }
     } else if (c.type === 'GRANT') {
       const forNewPass = !!c.subscriptionId && newSubs.some((x) => x.id === c.subscriptionId);
-      if (c.delta !== 8 || !forNewPass) errors.push('credit: this grant is not valid');
+      if (c.delta !== 8 || !forNewPass || payOnline) errors.push('credit: this grant is not valid');
     } else {
       errors.push('credit: only staff can adjust credits');
     }

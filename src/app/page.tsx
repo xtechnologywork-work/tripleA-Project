@@ -513,6 +513,13 @@ function BayOrderingClientScreen() {
   const [notes, setNotes] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // A short message at the top of the screen (the pass was activated)
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!flash) return;
+    const timer = setTimeout(() => setFlash(null), 4500);
+    return () => clearTimeout(timer);
+  }, [flash]);
 
   // Escape closes the open sheet
   useEffect(() => {
@@ -553,20 +560,26 @@ function BayOrderingClientScreen() {
 
   const startPayment = async (bay: string) => {
     if (!selectedPlan || !currentEmployee) return;
+    // The pass is bought on its own: nothing to fill in, and no order is made
+    const passOnly = selectedPlan.id === 'subscription-8';
     const res = await fetch('/api/pay/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-employee-token': mockStore.getEmployeeToken() || '' },
-      body: JSON.stringify({
-        plan: selectedPlan.id === 'subscription-8' ? 'pass' : 'single',
-        bay,
-        notes: notes.trim() || undefined,
-        plate: plateNumber.trim() || registeredVehicle?.plateNumber || undefined,
-        make: make || undefined,
-        model: model || undefined,
-        color: color || undefined,
-        photo: photoPreview || undefined,
-        lang: isRtl ? 'ar' : 'en',
-      }),
+      body: JSON.stringify(
+        passOnly
+          ? { plan: 'pass', passOnly: true, lang: isRtl ? 'ar' : 'en' }
+          : {
+              plan: 'single',
+              bay,
+              notes: notes.trim() || undefined,
+              plate: plateNumber.trim() || registeredVehicle?.plateNumber || undefined,
+              make: make || undefined,
+              model: model || undefined,
+              color: color || undefined,
+              photo: photoPreview || undefined,
+              lang: isRtl ? 'ar' : 'en',
+            }
+      ),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.url) {
@@ -589,8 +602,39 @@ function BayOrderingClientScreen() {
     window.location.assign(data.url);
   };
 
+  // The pass on its own: pay (or, without online payment, activate) and the 8 washes are there. No order is made.
+  const handleActivatePass = () => {
+    if (!currentEmployee) {
+      setConfirmError(t('genericAuthError'));
+      return;
+    }
+    setConfirmError('');
+    setIsSubmitting(true);
+    if (needsPayment) {
+      startPayment('').catch(() => {
+        setConfirmError(t('payGatewayError'));
+        setIsSubmitting(false);
+      });
+      return;
+    }
+    try {
+      mockStore.activateSubscriptionForEmployee(currentEmployee.id);
+      setRefreshTrigger((prev) => prev + 1);
+      setSelectedPlan(null);
+      setFlash(t('passActiveFlash'));
+    } catch {
+      setConfirmError(t('genericAuthError'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleConfirmOrder = () => {
     if (!selectedPlan) return;
+    if (selectedPlan.id === 'subscription-8') {
+      handleActivatePass();
+      return;
+    }
 
     const cleanBay = parkingBayInput.replace(/\D/g, '');
     if (!cleanBay) {
@@ -1196,6 +1240,15 @@ function BayOrderingClientScreen() {
         </div>
       </section>
 
+      {flash && (
+        <div role="status" className="fixed top-4 inset-x-4 z-[60] flex justify-center pointer-events-none">
+          <div className="flex items-center gap-2.5 rounded-full bg-emerald-500 text-black px-5 py-3 text-[14px] font-semibold shadow-lg animate-in fade-in slide-in-from-top-2 duration-200">
+            <CheckCircle2 className="h-4 w-4" />
+            <span>{flash}</span>
+          </div>
+        </div>
+      )}
+
       <main className="px-4 md:px-8 pt-6 md:pt-8 pb-6">
         <div className="max-w-[1100px] mx-auto space-y-4 md:space-y-5">
           {/* The order in progress: one tap to follow it */}
@@ -1671,7 +1724,7 @@ function BayOrderingClientScreen() {
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <span className="text-sm text-muted">{t('confirmSheetBadge')}</span>
+                <span className="text-sm text-muted">{selectedPlan.id === 'subscription-8' ? t('passSheetBadge') : t('confirmSheetBadge')}</span>
                 <h3 className="text-[21px] font-semibold text-ink tracking-tight leading-tight mt-0.5">{selectedPlan.title}</h3>
                 <div className="text-sm text-muted mt-1 tabular-nums">
                   {selectedPlan.price} {t('qar')}
@@ -1689,15 +1742,31 @@ function BayOrderingClientScreen() {
               </button>
             </div>
 
-            <div className="rounded-2xl bg-amber-400/[0.1] p-4 flex items-start gap-3">
-              <div className="w-9 h-9 rounded-full bg-amber-400/20 flex items-center justify-center flex-shrink-0 text-amber-300">
-                <KeyRound className="h-4 w-4" />
+            {selectedPlan.id !== 'subscription-8' && (
+              <div className="rounded-2xl bg-amber-400/[0.1] p-4 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-full bg-amber-400/20 flex items-center justify-center flex-shrink-0 text-amber-300">
+                  <KeyRound className="h-4 w-4" />
+                </div>
+                <div className="flex-1 space-y-1">
+                  <h4 className="text-[14px] font-semibold text-amber-300">{t('bigNoticeTitle')}</h4>
+                  <p className="text-sm text-body leading-relaxed">{t('bigNoticeDesc')}</p>
+                </div>
               </div>
-              <div className="flex-1 space-y-1">
-                <h4 className="text-[14px] font-semibold text-amber-300">{t('bigNoticeTitle')}</h4>
-                <p className="text-sm text-body leading-relaxed">{t('bigNoticeDesc')}</p>
+            )}
+
+            {/* The pass on its own: what it is, nothing to fill in */}
+            {selectedPlan.id === 'subscription-8' && (
+              <div className="rounded-2xl bg-inset p-4 space-y-2.5">
+                <div className="flex items-center gap-2.5 text-[15px] font-semibold text-ink">
+                  <BadgeCheck className="h-5 w-5 text-emerald-400 flex-shrink-0" />
+                  <span>{t('passSheetIncludes')}</span>
+                </div>
+                <p className="text-sm text-body">
+                  {t('passSheetValidity').replace('{days}', String(mockStore.getDb().packages.find((p) => p.id === 'pkg-executive')?.validityDays ?? 60))}
+                </p>
+                <p className="text-sm text-muted leading-relaxed">{t('passSheetNote')}</p>
               </div>
-            </div>
+            )}
 
             {confirmError && (
               <div role="alert" className="p-3.5 rounded-xl bg-rose-400/15 text-rose-300 text-sm flex items-center gap-2.5">
@@ -1706,6 +1775,7 @@ function BayOrderingClientScreen() {
               </div>
             )}
 
+            {selectedPlan.id !== 'subscription-8' && (
             <div className="space-y-5">
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -1808,6 +1878,7 @@ function BayOrderingClientScreen() {
                 />
               </div>
             </div>
+            )}
 
             <button
               onClick={handleConfirmOrder}
@@ -1821,6 +1892,8 @@ function BayOrderingClientScreen() {
                     : t('processing')
                   : needsPayment
                   ? `${t('payNowBtn')} · ${selectedPlan.price} ${t('qar')}`
+                  : selectedPlan.id === 'subscription-8'
+                  ? t('activateSubNowBtn')
                   : parkingBayInput.trim()
                   ? `${t('confirmOrderBtn')} ${parkingBayInput.trim()} · ${selectedPlan.price} ${t('qar')}`
                   : `${t('confirmOrderBtn')} · ${selectedPlan.price} ${t('qar')}`}

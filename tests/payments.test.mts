@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { cleanDraft, priceFor, pickService, pickPackage, buildFulfillment, fulfillmentIds } from '../src/domain/payments.ts';
+import { cleanDraft, priceFor, pickService, pickPackage, buildFulfillment, buildPassOnly, fulfillmentIds } from '../src/domain/payments.ts';
 import { myFatoorahConfig, createPaymentPage, checkPayment, webhookSignatureString } from '../src/lib/myfatoorah.ts';
 
 const SERVICE = { id: 'srv-exterior', name: 'Wash', description: '', durationMin: 30, price: { amountMinor: 2000, currency: 'QAR' }, creditCost: 1, active: true, sortOrder: 1 };
@@ -174,4 +174,45 @@ test('an order made when the customer reaches the payment page is marked not pai
   assert.equal(f.order.id, fulfillmentIds('abc-123').order);
   assert.equal(f.credits.length, 0);
   assert.equal(f.subscriptions.length, 0);
+});
+
+// ---- the pass on its own (no order) ----
+test('buying the pass only needs no bay and no photo', () => {
+  const r = cleanDraft({ passOnly: true, bay: 'x', photo: 'not an image', notes: 'hello', lang: 'ar' }, 1288);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.draft, { bay: '', passOnly: true, lang: 'ar' });
+  // only a real boolean true counts
+  assert.deepEqual(cleanDraft({ passOnly: 'true' }, 1288), { ok: false, error: 'BAD_BAY' });
+});
+
+test('a bought pass is the pass and 8 washes, with no order and no wash used', () => {
+  const f = buildPassOnly({ intent: intent({ plan: 'pass', amountMinor: 14000, draft: { bay: '', passOnly: true, lang: 'en' } }), employee: EMP, pkg: PKG, activePass: null, now: NOW });
+  assert.equal(f.subscriptions.length, 1);
+  assert.equal(f.subscriptions[0].status, 'ACTIVE');
+  assert.equal(f.subscriptions[0].activatedBy, 'online-payment');
+  assert.equal(f.subscriptions[0].expiresAt, '2027-01-06T10:00:00.000Z');
+  assert.equal(f.credits.length, 1);
+  assert.equal(f.credits[0].type, 'GRANT');
+  assert.equal(f.credits[0].delta, 8);
+  assert.equal(f.credits[0].subscriptionId, f.subscriptions[0].id);
+  assert.equal(f.credits.some((c) => c.type === 'DEBIT'), false);
+});
+
+test('a second pass bought at the same time adds the washes to the one that exists', () => {
+  const active = { id: 'sub-old', employeeId: 'emp-1', status: 'ACTIVE' };
+  const f = buildPassOnly({ intent: intent({ plan: 'pass' }), employee: EMP, pkg: PKG, activePass: active, now: NOW });
+  assert.equal(f.subscriptions.length, 0);
+  assert.equal(f.credits[0].subscriptionId, 'sub-old');
+});
+
+test('the same payment always gives the same ids, so a repeat never doubles the pass', () => {
+  const a = buildPassOnly({ intent: intent({ plan: 'pass' }), employee: EMP, pkg: PKG, activePass: null, now: NOW });
+  const b = buildPassOnly({ intent: intent({ plan: 'pass' }), employee: EMP, pkg: PKG, activePass: null, now: '2026-11-07T10:05:00.000Z' });
+  assert.equal(a.subscriptions[0].id, b.subscriptions[0].id);
+  assert.equal(a.credits[0].id, b.credits[0].id);
+  assert.equal(a.subscriptions[0].id, fulfillmentIds('abc-123').subscription);
+});
+
+test('without a pass package there is nothing to sell', () => {
+  assert.throws(() => buildPassOnly({ intent: intent({ plan: 'pass' }), employee: EMP, pkg: null, activePass: null, now: NOW }));
 });

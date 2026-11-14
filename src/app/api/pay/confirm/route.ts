@@ -28,6 +28,9 @@ export async function POST(req: Request) {
   const ref = String(body.paymentRef || '').trim();
   if (/^[0-9a-f-]{36}$/i.test(ref)) {
     const intent = await findPayment({ id: ref });
+    if (intent?.status === 'FULFILLED' && intent.draft?.passOnly) {
+      return NextResponse.json({ status: 'PAID', passOnly: true }, noStore);
+    }
     if (intent?.status === 'FULFILLED' && intent.orderReference) {
       return NextResponse.json({ status: 'PAID', reference: intent.orderReference }, noStore);
     }

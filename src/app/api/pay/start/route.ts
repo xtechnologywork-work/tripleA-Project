@@ -40,6 +40,8 @@ export async function POST(req: Request) {
   if (!plan) return fail('BAD_REQUEST');
   const cleaned = cleanDraft(body, TOTAL_BAYS);
   if (!cleaned.ok) return fail(cleaned.error);
+  // Buying the pass only is for the pass
+  if (cleaned.draft.passOnly && plan !== 'pass') return fail('BAD_REQUEST');
 
   const id = crypto.randomUUID();
   const draft = cleaned.draft;
@@ -88,6 +90,7 @@ export async function POST(req: Request) {
 
   // The team sees the order right away, marked not paid; it turns paid when MyFatoorah confirms.
   // The order and the invoice number are saved at the same time.
-  await Promise.all([createUnpaidOrder(intent, data), savePayment({ ...intent, invoiceId: page.page.invoiceId })]);
+  // A pass bought on its own has no order to make.
+  await Promise.all([draft.passOnly ? Promise.resolve(null) : createUnpaidOrder(intent, data), savePayment({ ...intent, invoiceId: page.page.invoiceId })]);
   return NextResponse.json({ url: page.page.url, paymentRef: id });
 }

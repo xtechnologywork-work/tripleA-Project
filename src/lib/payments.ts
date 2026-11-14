@@ -8,6 +8,7 @@ import { getLocalDb, mergeLocal } from '@/lib/local-db';
 import { myFatoorahConfig, checkPayment } from '@/lib/myfatoorah';
 import {
   buildFulfillment,
+  buildPassOnly,
   fulfillmentIds,
   pickPackage,
   pickService,
@@ -149,7 +150,8 @@ async function makeReference(db: MockDatabase | null, createdAt: string): Promis
 // Confirming a payment
 // ---------------------------------------------------------------------------
 export type ConfirmResult =
-  | { status: 'PAID'; reference: string }
+  | { status: 'PAID'; reference: string; passOnly?: false }
+  | { status: 'PAID'; passOnly: true; reference?: undefined }
   | { status: 'PENDING' }
   | { status: 'FAILED' }
   | { status: 'ERROR'; error: string };
@@ -176,6 +178,7 @@ export async function confirmPayment(key: string, keyType: 'PaymentId' | 'Invoic
     return { status: 'ERROR', error: 'UNKNOWN_PAYMENT' };
   }
 
+  if (intent.status === 'FULFILLED' && intent.draft?.passOnly) return { status: 'PAID', passOnly: true };
   if (intent.status === 'FULFILLED' && intent.orderReference) return { status: 'PAID', reference: intent.orderReference };
   if (!c.paid) {
     // This attempt failed or was cancelled (the invoice itself stays open, so the customer can try again)
@@ -187,6 +190,7 @@ export async function confirmPayment(key: string, keyType: 'PaymentId' | 'Invoic
   // Paid. Take the payment for this request; a second request at the same time stops here
   const claimed = intent.status === 'PENDING' || intent.status === 'FAILED' ? await claimPaid(intent, c.paymentId, c.gateway) : false;
   const fresh = (await findPayment({ id: intent.id })) || intent;
+  if (fresh.status === 'FULFILLED' && fresh.draft?.passOnly) return { status: 'PAID', passOnly: true };
   if (fresh.status === 'FULFILLED' && fresh.orderReference) return { status: 'PAID', reference: fresh.orderReference };
   if (!claimed) {
     // Another request is making the order right now: let the screen ask again in a moment
@@ -196,7 +200,12 @@ export async function confirmPayment(key: string, keyType: 'PaymentId' | 'Invoic
   }
 
   try {
-    const reference = await fulfill({ ...fresh, paymentId: fresh.paymentId || c.paymentId, gateway: fresh.gateway || c.gateway });
+    const paidIntent = { ...fresh, paymentId: fresh.paymentId || c.paymentId, gateway: fresh.gateway || c.gateway };
+    if (paidIntent.draft?.passOnly) {
+      await fulfillPassOnly(paidIntent);
+      return { status: 'PAID', passOnly: true };
+    }
+    const reference = await fulfill(paidIntent);
     return { status: 'PAID', reference };
   } catch (err) {
     console.error('Making the order after payment failed:', err);
@@ -237,6 +246,24 @@ export async function createUnpaidOrder(intent: PaymentIntent, data?: PayData): 
     console.error('Making the unpaid order failed:', err);
     return null;
   }
+}
+
+/** A paid pass with no order: the pass and its 8 washes. The ids come from the payment, so it never doubles. */
+async function fulfillPassOnly(intent: PaymentIntent): Promise<void> {
+  const ids = fulfillmentIds(intent.id);
+  const d = await loadForPayment(intent.employeeId);
+  if (!d || !d.employee) throw new Error('Employee missing');
+  // A pass this payment already made does not count as "another pass" if the request is repeated
+  const activePass = d.activeSubscriptions.find((x) => x.id !== ids.subscription) || null;
+  const f = buildPassOnly({ intent, employee: d.employee, pkg: pickPackage(d.packages), activePass, now: new Date().toISOString() });
+  if (onSupabase()) {
+    const result = await applyChanges({ subscriptions: f.subscriptions, credits: f.credits }, { admin: true });
+    if (!result.ok) throw new Error(result.error || 'Saving the pass failed');
+    if (result.rejected.length) throw new Error(result.rejected.join('; '));
+  } else {
+    mergeLocal({ subscriptions: f.subscriptions, credits: f.credits });
+  }
+  await savePayment({ ...intent, status: 'FULFILLED' });
 }
 
 /** Makes the order (and the pass) for a paid payment. The ids come from the payment, so it never doubles. */
