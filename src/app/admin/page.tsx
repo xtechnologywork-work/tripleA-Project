@@ -14,6 +14,8 @@ import { awaitingOnlinePayment, reorderTimes } from '@/domain/analytics';
 import { initialOf } from '@/domain/names';
 import { TowerBays } from '@/components/admin/tower-bays';
 import { SettingsPage } from '@/components/admin/settings-page';
+import { VipBadge } from '@/components/ui/vip-badge';
+import { sortQueue } from '@/domain/queue';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
 import { InspectionFlow } from '@/components/inspection/inspection-flow';
 import { isCleared } from '@/domain/inspection';
@@ -42,6 +44,7 @@ import {
   Settings as SettingsIcon,
   MapPin,
   Sparkles,
+  Crown,
   Phone,
   ExternalLink,
   Camera,
@@ -131,7 +134,7 @@ export default function AdminDashboardPage() {
 
   // Client Directory Filters
   const [clientSearchQuery, setClientSearchQuery] = useState('');
-  const [clientSubFilter, setClientSubFilter] = useState<'ALL' | 'ACTIVE_SUB' | 'NO_SUB'>('ALL');
+  const [clientSubFilter, setClientSubFilter] = useState<'ALL' | 'ACTIVE_SUB' | 'NO_SUB' | 'VIP'>('ALL');
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -349,6 +352,34 @@ export default function AdminDashboardPage() {
   // The tower shows real orders only: one still waiting for its online payment is not a car to pick up yet
   const towerOrders = useMemo(() => orders.filter((o) => !awaitingOnlinePayment(o)), [orders]);
 
+  // VIP: mark or unmark a client. The server saves it; the list refreshes at once.
+  const [vipBusy, setVipBusy] = useState<string | null>(null);
+  const toggleVip = async (emp: Employee) => {
+    if (vipBusy) return;
+    setVipBusy(emp.id);
+    try {
+      const sb = getSupabase();
+      const session = sb ? (await sb.auth.getSession()).data.session : null;
+      const res = await fetch('/api/admin/vip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        body: JSON.stringify({ employeeId: emp.id, vip: !emp.vip }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(String(data.error || 'Could not change VIP. Try again.'));
+        return;
+      }
+      showToast(!emp.vip ? `${emp.fullName} is now VIP. Their orders stay at the top.` : `VIP removed from ${emp.fullName}`);
+      await mockStore.syncFromServer(true);
+      reloadData();
+    } catch {
+      showToast('Could not change VIP. Check your connection.');
+    } finally {
+      setVipBusy(null);
+    }
+  };
+
   // Washed cars the team already saw the owner take
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const collectedIds = useMemo(() => new Set(mockStore.getDb().orderEvents.filter((e) => e.type === 'COLLECTED').map((e) => e.orderId)), [orders, lastSyncTime]);
@@ -364,6 +395,9 @@ export default function AdminDashboardPage() {
       showToast(err instanceof Error ? err.message : 'Could not mark it as collected');
     }
   };
+
+  // The clients the team marked as VIP: their orders wait at the very top until they are done
+  const vipIds = useMemo(() => new Set(employees.filter((e) => e.vip).map((e) => e.id)), [employees]);
 
   // Filtered Orders for Dispatch
   const filteredOrders = useMemo(() => {
@@ -385,10 +419,10 @@ export default function AdminDashboardPage() {
 
       return matchesSearch && matchesStatus && matchesZone;
     });
-    // Newest placement first; postponed orders wait at the bottom, out of the team's way
-    return list.sort((a, b) => Number(a.status === 'DELAYED') - Number(b.status === 'DELAYED') || queuedAt(b) - queuedAt(a));
+    // Active VIP orders first; then newest placement first; postponed orders wait at the bottom, out of the team's way
+    return sortQueue(list, vipIds, queuedAt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, searchQuery, statusFilter, zoneFilter, employees, reorderedAt]);
+  }, [orders, searchQuery, statusFilter, zoneFilter, employees, reorderedAt, vipIds]);
 
   const selectedOrder = orders.find((o) => o.id === selectedOrderId) || filteredOrders[0] || null;
   const selectedOrderClient = selectedOrder ? employees.find((e) => e.id === selectedOrder.employeeId) : null;
@@ -423,6 +457,7 @@ export default function AdminDashboardPage() {
 
       if (clientSubFilter === 'ACTIVE_SUB' && !hasActiveSub) return false;
       if (clientSubFilter === 'NO_SUB' && hasActiveSub) return false;
+      if (clientSubFilter === 'VIP' && !emp.vip) return false;
 
       return matchesSearch;
     });
@@ -778,7 +813,7 @@ export default function AdminDashboardPage() {
   };
 
   const exportClientsCsv = () => {
-    const header = ['Name', 'Employee number', 'Phone', 'Company', 'Pass', 'Wash balance', 'Orders'];
+    const header = ['Name', 'Employee number', 'Phone', 'Company', 'VIP', 'Pass', 'Wash balance', 'Orders'];
     const rows = filteredClients.map((emp) => {
       const sub = mockStore.getEmployeeSubscription(emp.id);
       return [
@@ -786,6 +821,7 @@ export default function AdminDashboardPage() {
         emp.employeeNo || '',
         emp.phone || '',
         emp.company || '',
+        emp.vip ? 'VIP' : '',
         sub && sub.status === 'ACTIVE' ? 'Active' : 'None',
         mockStore.getCreditBalance(emp.id),
         mockStore.getEmployeeOrders(emp.id).length,
@@ -1250,6 +1286,7 @@ export default function AdminDashboardPage() {
                             <div className="flex items-center gap-2">
                               <span className="text-[14px] font-semibold text-ink tabular-nums">{ord.vehicleSnapshot.plateNumber}</span>
                               {photos.length > 0 && <Camera className="h-3.5 w-3.5 text-link-soft" />}
+                              {client?.vip && <VipBadge />}
                             </div>
                             <div className="text-sm text-body truncate">
                               {client?.fullName || 'Ministry Staff'}
@@ -1294,6 +1331,7 @@ export default function AdminDashboardPage() {
                           </h2>
                           {renderStatusPill(selectedOrder.status)}
                           {renderKindBadge(selectedOrder)}
+                          {selectedOrderClient?.vip && <VipBadge />}
                         </div>
                         <div className="flex items-center gap-3 text-sm text-muted flex-wrap">
                           <span className="flex items-center gap-1.5 text-body">
@@ -1798,12 +1836,13 @@ export default function AdminDashboardPage() {
 
                   <select
                     value={clientSubFilter}
-                    onChange={(e) => setClientSubFilter(e.target.value as 'ALL' | 'ACTIVE_SUB' | 'NO_SUB')}
+                    onChange={(e) => setClientSubFilter(e.target.value as 'ALL' | 'ACTIVE_SUB' | 'NO_SUB' | 'VIP')}
                     className="bg-tile rounded-full px-4 py-2.5 text-sm text-body outline-none"
                   >
                     <option value="ALL">All Clients ({employees.length})</option>
                     <option value="ACTIVE_SUB">Active 140 QAR Passes ({metrics.activeSubscribers})</option>
                     <option value="NO_SUB">No Active Pass</option>
+                    <option value="VIP">VIP clients ({employees.filter((e) => e.vip).length})</option>
                   </select>
                 </div>
 
@@ -1852,7 +1891,10 @@ export default function AdminDashboardPage() {
                                     {initialOf(emp.fullName)}
                                   </div>
                                   <div className="min-w-0">
-                                    <span className="font-semibold text-ink block">{emp.fullName}</span>
+                                    <span className="font-semibold text-ink flex items-center gap-2">
+                                      <span className="truncate">{emp.fullName}</span>
+                                      {emp.vip && <VipBadge />}
+                                    </span>
                                     <div className="flex items-center gap-2 mt-0.5 text-xs text-dim tabular-nums">
                                       <span>{emp.employeeNo || `MOCI-${(emp.phone || '').slice(-4)}`}</span>
                                       {emp.employeeNo && <span>Employee no: {emp.employeeNo}</span>}
@@ -1902,6 +1944,17 @@ export default function AdminDashboardPage() {
 
                               <td className="py-3.5 px-5">
                                 <div className="flex items-center justify-end gap-2">
+                                  <button
+                                    onClick={() => void toggleVip(emp)}
+                                    disabled={vipBusy === emp.id}
+                                    className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm transition cursor-pointer whitespace-nowrap disabled:opacity-50 ${
+                                      emp.vip ? 'bg-amber-400 hover:bg-amber-300 text-black font-semibold' : 'bg-fill hover:bg-fill-strong text-ink'
+                                    }`}
+                                    title={emp.vip ? 'Remove VIP' : 'Make this client VIP'}
+                                  >
+                                    <Crown className="h-3.5 w-3.5" />
+                                    {emp.vip ? 'VIP' : 'Make VIP'}
+                                  </button>
                                   <button
                                     onClick={() => setCreditModalClient(emp)}
                                     className="px-3.5 py-1.5 rounded-full bg-fill hover:bg-fill-strong text-ink text-sm transition cursor-pointer whitespace-nowrap"
@@ -2069,6 +2122,7 @@ export default function AdminDashboardPage() {
                 employees={employees}
                 reorderedAt={reorderedAt}
                 collected={collectedIds}
+                vipIds={vipIds}
                 now={clock}
                 onOpen={(id) => {
                   openOrder(id);

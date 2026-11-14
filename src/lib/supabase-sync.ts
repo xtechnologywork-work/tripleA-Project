@@ -5,6 +5,7 @@ import { isValidStaffTransition, isCustomerMove } from '../domain/status-machine
 import { withTitle } from '../domain/names';
 import { myFatoorahConfig } from './myfatoorah';
 import { currentOrdering } from './ordering-settings';
+import { loadVipIds } from './vip-settings';
 import { validateInspection, requiresPreWashInspection } from '../domain/inspection';
 import {
   Employee,
@@ -228,6 +229,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
   if (!sb) return null;
 
   try {
+    const vipPromise = loadVipIds(); // read at the same time as the tables
     const [
       empsRes,
       vehsRes,
@@ -261,6 +263,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
     ]);
     const inspectionEnabled = !inspectionRes.error;
     inspectionSchema = { ready: inspectionEnabled, checkedAt: Date.now() };
+    const vipIds = await vipPromise;
 
     if (empsRes.error) {
       console.warn('Supabase fetch error:', empsRes.error.message);
@@ -277,6 +280,7 @@ export async function fetchSupabaseState(): Promise<{ db: MockDatabase; version:
       company: e.company ? String(e.company) : undefined,
       status: (e.status === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE') as 'ACTIVE' | 'SUSPENDED',
       createdAt: e.created_at ? String(e.created_at) : new Date().toISOString(),
+      vip: vipIds.has(String(e.id)),
     }));
 
     const vehicles: Vehicle[] = (vehsRes.data || []).map((v: Row) => ({

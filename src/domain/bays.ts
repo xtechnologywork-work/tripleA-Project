@@ -25,6 +25,8 @@ export interface BayCard {
   probablyGone?: boolean;
   /** A waiting car: a washed car is still marked as left on this bay number */
   washedHere?: boolean;
+  /** The owner is a VIP client */
+  vip?: boolean;
 }
 
 export interface TowerBoard {
@@ -56,7 +58,13 @@ function markConflicts(cards: BayCard[], keyOf: (c: BayCard) => string): BayCard
 /**
  * @param collected ids of ready cars the team already marked as collected by their owner
  */
-export function buildTowerBoard(orders: Order[], reorderedAt: Map<string, number>, now: number, collected: Set<string> = new Set()): TowerBoard {
+export function buildTowerBoard(
+  orders: Order[],
+  reorderedAt: Map<string, number>,
+  now: number,
+  collected: Set<string> = new Set(),
+  vipIds: Set<string> = new Set()
+): TowerBoard {
   const toPickUp: BayCard[] = [];
   const withTeam: BayCard[] = [];
   const ready: BayCard[] = [];
@@ -91,7 +99,9 @@ export function buildTowerBoard(orders: Order[], reorderedAt: Map<string, number
     }
   }
 
-  const waiting = markConflicts(toPickUp.sort((a, b) => a.since - b.since), (c) => c.bay);
+  // VIP cars come first in the lists the team works through; inside each group, the longest waiting first
+  const vipFirst = (a: BayCard, b: BayCard) => Number(vipIds.has(b.order.employeeId)) - Number(vipIds.has(a.order.employeeId)) || a.since - b.since;
+  const waiting = markConflicts(toPickUp.sort(vipFirst), (c) => c.bay);
   const washed = markConflicts(ready.sort((a, b) => b.since - a.since), (c) => `${c.floor || ''}|${c.bay}`);
 
   // A bay holds one car. A washed car and a waiting car on the same bay number cannot both be there:
@@ -110,7 +120,8 @@ export function buildTowerBoard(orders: Order[], reorderedAt: Map<string, number
     }
   }
 
-  return { toPickUp: waiting, withTeam: withTeam.sort((a, b) => a.since - b.since), ready: washed, postponed };
+  const mark = (list: BayCard[]) => list.map((c) => (vipIds.has(c.order.employeeId) ? { ...c, vip: true } : c));
+  return { toPickUp: mark(waiting), withTeam: mark(withTeam.sort(vipFirst)), ready: mark(washed), postponed };
 }
 
 /** What is at one bay number right now (a car waiting there, and/or a ready car left there). */

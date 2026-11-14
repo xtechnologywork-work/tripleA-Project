@@ -40,6 +40,8 @@ export interface Employee {
   company?: string;
   status: 'ACTIVE' | 'SUSPENDED';
   createdAt: string;
+  /** A VIP client: their orders always wait at the top of the queue until they are done */
+  vip?: boolean;
 }
 
 export interface StaffUser {

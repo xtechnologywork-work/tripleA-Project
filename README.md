@@ -54,6 +54,10 @@ Create the admin user in Supabase Auth and give them the admin role (the end of 
 
 In the admin dashboard, **Settings** controls when employees may place orders: a switch (**Open orders** / **Close orders**) and the daily hours in Doha time. Orders are accepted only when the switch is on **and** the time is inside the hours. At first the switch is off, so employees cannot order until the team presses **Open orders**. The server checks it again on every new order and every payment start, so a closed shop cannot be bypassed from a phone. Buying a pass is not an order and stays possible. The settings are one small private file in Supabase Storage (`settings/ordering.json`), so no SQL is needed.
 
+## VIP clients
+
+In **Clients & Registry**, the **Make VIP** button marks a client as VIP (a gold badge; the filter has a **VIP clients** option). An active VIP order always waits at the very top of the Dispatch Queue and of the Tower Bays list, whatever its age, until it is done (ready or cancelled), then it joins the normal order again. The client sees a VIP badge in their profile. The list is one small private file in Supabase Storage (`settings/vip.json`), so no SQL is needed; every change is in the audit log.
+
 ## Tests and checks
 
 ```bash

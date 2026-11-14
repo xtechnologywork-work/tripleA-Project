@@ -6,6 +6,7 @@ import { TOTAL_BAYS } from '@/data/mock/seed';
 import { buildTowerBoard, findBay, type BayCard } from '@/domain/bays';
 import type { Employee, Order, OrderStatus } from '@/domain/types';
 import { plateLabel } from '@/lib/utils';
+import { VipBadge } from '@/components/ui/vip-badge';
 
 const card = 'rounded-3xl bg-tile';
 
@@ -68,7 +69,10 @@ function Place({
         <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${dot}`} />
       </div>
       <div className="min-w-0 space-y-0.5">
-        <div className="text-[14px] font-semibold text-ink truncate">{name}</div>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[14px] font-semibold text-ink truncate">{name}</span>
+          {c.vip && <VipBadge />}
+        </div>
         <div className="text-sm text-muted truncate tabular-nums">{vehicleLine(c.order)}</div>
       </div>
       <div className="flex items-center justify-between gap-2 text-xs">
@@ -138,6 +142,7 @@ export function TowerBays({
   employees,
   reorderedAt,
   collected,
+  vipIds,
   now,
   onOpen,
   onCollected,
@@ -147,12 +152,14 @@ export function TowerBays({
   reorderedAt: Map<string, number>;
   /** Ready cars the team already marked as collected */
   collected: Set<string>;
+  /** Employees the team marked as VIP: their cars come first */
+  vipIds: Set<string>;
   now: number | null;
   onOpen: (orderId: string) => void;
   onCollected: (orderId: string) => void;
 }) {
   const [query, setQuery] = useState('');
-  const board = useMemo(() => buildTowerBoard(orders, reorderedAt, now ?? 0, collected), [orders, reorderedAt, now, collected]);
+  const board = useMemo(() => buildTowerBoard(orders, reorderedAt, now ?? 0, collected, vipIds), [orders, reorderedAt, now, collected, vipIds]);
   // The clock starts a moment after the page opens: wait for it, so old ready cars never flash on screen
   if (now === null) return <div className="h-40" aria-hidden />;
   const nameOf = (o: Order) => employees.find((e) => e.id === o.employeeId)?.fullName || 'Ministry staff';

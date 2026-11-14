@@ -10,6 +10,7 @@ import { compressImage } from '@/lib/image';
 import { awaitingOnlinePayment } from '@/domain/analytics';
 import { initialOf } from '@/domain/names';
 import { clockLabel } from '@/domain/ordering';
+import { VipBadge } from '@/components/ui/vip-badge';
 import type { ActorContext } from '@/domain/status-machine';
 import { useAuth } from '@/context/auth-context';
 import { useLanguage } from '@/context/language-context';
@@ -1404,8 +1405,11 @@ function BayOrderingClientScreen() {
                   {initialOf(currentEmployee?.fullName || '')}
                 </span>
                 <div className="min-w-0">
-                  <div className="text-[16px] font-semibold text-ink truncate">
-                    {currentEmployee?.fullName || t('ministryEmployeeTitle')}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[16px] font-semibold text-ink truncate">
+                      {currentEmployee?.fullName || t('ministryEmployeeTitle')}
+                    </span>
+                    {currentEmployee?.vip && <VipBadge label={t('vipBadgeLabel')} />}
                   </div>
                   <div className="text-sm text-muted tabular-nums whitespace-nowrap" dir="ltr">
                     {currentEmployee?.phone || employeePhone}
@@ -1565,6 +1569,12 @@ function BayOrderingClientScreen() {
                       <h3 className="text-[24px] font-semibold text-ink tracking-tight leading-tight truncate">
                         {currentEmployee?.fullName}
                       </h3>
+                      {currentEmployee?.vip && (
+                        <div className="flex items-center gap-2 pt-0.5">
+                          <VipBadge label={t('vipBadgeLabel')} className="text-[12px] px-2.5 py-1" />
+                          <span className="text-sm text-amber-300/90">{t('vipNote')}</span>
+                        </div>
+                      )}
                       <p className="text-sm text-muted tabular-nums" dir="ltr">{currentEmployee?.phone || employeePhone}</p>
                       <p className="text-sm text-muted tabular-nums">
                         {t('employeeNoLabel')}: {currentEmployee?.employeeNo}
