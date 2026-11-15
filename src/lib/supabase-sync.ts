@@ -116,7 +116,15 @@ export async function findEmployeeByPhone(last8: string): Promise<Employee | nul
   return hit ? mapEmployeeRow(hit) : null;
 }
 
-export async function createEmployee(employee: Employee): Promise<{ ok: boolean; error?: string }> {
+/** Is this employee number already used by an account? (One number, one account.) */
+export async function employeeNoTaken(employeeNo: string): Promise<boolean> {
+  const sb = getServerSupabase();
+  if (!sb) return false;
+  const { data } = await sb.from('employees').select('id').eq('employee_no', employeeNo).limit(1);
+  return (data || []).length > 0;
+}
+
+export async function createEmployee(employee: Employee): Promise<{ ok: boolean; error?: string; taken?: boolean }> {
   const sb = getServerSupabase();
   if (!sb) return { ok: false, error: 'Supabase is not configured' };
   const { error } = await sb.from('employees').insert({
@@ -129,7 +137,8 @@ export async function createEmployee(employee: Employee): Promise<{ ok: boolean;
     company: employee.company || 'Ministry of Commerce and Industry - State of Qatar',
     status: 'ACTIVE',
   });
-  return error ? { ok: false, error: error.message } : { ok: true };
+  if (error) return { ok: false, error: error.message, taken: error.code === '23505' && /employee_no/i.test(`${error.message} ${error.details || ''}`) };
+  return { ok: true };
 }
 
 let inspectionSchema: { ready: boolean; checkedAt: number } = { ready: false, checkedAt: 0 };

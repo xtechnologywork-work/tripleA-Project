@@ -285,6 +285,7 @@ function BayOrderingClientScreen() {
     const errors: Record<string, string> = {
       NOT_FOUND: t('accountNotFoundError'),
       EXISTS: t('accountExistsError'),
+      EMPLOYEE_NO_TAKEN: t('employeeNoTakenError'),
       TOO_MANY: t('tooManyAttemptsError'),
       SUSPENDED: t('accountSuspendedError'),
       BAD_NAME: t('nameRequiredError'),

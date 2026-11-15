@@ -43,6 +43,7 @@ export type OtpError =
   | 'BAD_PHONE'
   | 'NOT_FOUND'
   | 'EXISTS'
+  | 'EMPLOYEE_NO_TAKEN'
   | 'SUSPENDED'
   | 'BAD_NAME'
   | 'BAD_EMPLOYEE_NO'

@@ -3,7 +3,7 @@
  */
 import type { Employee } from '@/domain/types';
 import { withTitle } from '@/domain/names';
-import { findEmployeeByPhone, createEmployee } from '@/lib/supabase-sync';
+import { findEmployeeByPhone, createEmployee, employeeNoTaken } from '@/lib/supabase-sync';
 import { isServerSupabaseConfigured } from '@/lib/supabase-server';
 import { getLocalDb, mergeLocal } from '@/lib/local-db';
 
@@ -21,6 +21,12 @@ export async function findByPhone(last8: string): Promise<Employee | null> {
   if (isServerSupabaseConfigured()) return findEmployeeByPhone(last8);
   const list = ((getLocalDb()?.employees as Employee[]) || []).filter((e) => (e.phone || '').replace(/\D/g, '').endsWith(last8));
   return list[0] || null;
+}
+
+/** One employee number, one account. */
+export async function employeeNoUsed(employeeNo: string): Promise<boolean> {
+  if (isServerSupabaseConfigured()) return employeeNoTaken(employeeNo);
+  return ((getLocalDb()?.employees as Employee[]) || []).some((e) => e.employeeNo === employeeNo);
 }
 
 export async function createAccount(last8: string, fullName: string, employeeNo: string): Promise<Employee | null> {

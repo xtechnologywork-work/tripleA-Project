@@ -4,7 +4,7 @@ import { twilioConfig, sendCode, lastTwilioRefusal } from '@/lib/twilio-verify';
 import { underLimits, recordEvents } from '@/lib/otp-limits';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
 import { signPendingSignup } from '@/lib/employee-session';
-import { otpEnabled, devCode, findByPhone, cleanName, validName, cleanEmployeeNo, validEmployeeNo } from '@/lib/otp-auth';
+import { otpEnabled, devCode, findByPhone, employeeNoUsed, cleanName, validName, cleanEmployeeNo, validEmployeeNo } from '@/lib/otp-auth';
 
 const fail = (error: OtpError, status = 400) => NextResponse.json({ error }, { status });
 
@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     // Only Ministry employee numbers may sign up (the rule stays on the server, the screen is only told "not allowed")
     if (!isMinistryEmployeeNo(employeeNo) || !validEmployeeNo(employeeNo)) return fail('NOT_ALLOWED', 403);
     if (existing) return fail('EXISTS', 409);
+    if (await employeeNoUsed(employeeNo)) return fail('EMPLOYEE_NO_TAKEN', 409);
     try {
       pending = signPendingSignup({ phone, fullName, employeeNo });
     } catch {
