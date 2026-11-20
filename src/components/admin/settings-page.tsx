@@ -5,6 +5,7 @@ import { Check, Clock, Power } from 'lucide-react';
 import { getSupabase } from '@/lib/supabase';
 import { clockLabel, type OrderingView } from '@/domain/ordering';
 import { OtpSettings } from './otp-settings';
+import { WhatsAppSettings } from './whatsapp-settings';
 
 const card = 'rounded-3xl bg-tile';
 
@@ -203,6 +204,9 @@ export function SettingsPage({ onChanged }: { onChanged?: () => void }) {
           Save the hours
         </button>
       </section>
+
+      {/* WhatsApp message for each step of an order */}
+      <WhatsAppSettings />
 
       {/* Sign in by SMS code */}
       <OtpSettings />

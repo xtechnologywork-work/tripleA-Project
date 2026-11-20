@@ -15,6 +15,7 @@ import { initialOf } from '@/domain/names';
 import { TowerBays } from '@/components/admin/tower-bays';
 import { SettingsPage } from '@/components/admin/settings-page';
 import { AddClientDialog } from '@/components/admin/add-client-dialog';
+import { WhatsAppButtons } from '@/components/admin/whatsapp-buttons';
 import { clientIdLine, isQidClient } from '@/domain/clients';
 import { VipBadge } from '@/components/ui/vip-badge';
 import { sortQueue } from '@/domain/queue';
@@ -1557,6 +1558,15 @@ export default function AdminDashboardPage() {
                         </div>
                       );
                     })()}
+
+                    {/* WhatsApp: one button per step, opening the customer's chat with the message from Settings */}
+                    {selectedOrder.status !== 'DELAYED' && (
+                      <WhatsAppButtons
+                        order={selectedOrder}
+                        client={selectedOrderClient}
+                        inspectionSubmitted={selectedBefore?.status === 'SUBMITTED'}
+                      />
+                    )}
 
                     {/* Details */}
                     <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
