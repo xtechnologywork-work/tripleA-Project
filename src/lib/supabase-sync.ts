@@ -4,6 +4,7 @@ import { MockDatabase, TOTAL_BAYS } from '../data/mock/seed';
 import { isValidStaffTransition, isCustomerMove } from '../domain/status-machine';
 import { withTitle } from '../domain/names';
 import { isQidClient } from '../domain/clients';
+import { needsReadyPhoto } from '../domain/ready-photo';
 import { myFatoorahConfig } from './myfatoorah';
 import { currentOrdering } from './ordering-settings';
 import { loadVipIds } from './vip-settings';
@@ -981,6 +982,17 @@ export async function applyChanges(input: SyncChanges, identity: Identity): Prom
               continue;
             }
           }
+          // "Ready at bay" needs the photo of the clean car at its bay (sent in this batch, or already saved)
+          if (isAdmin && needsReadyPhoto(from, order.status)) {
+            const inBatch = (changes.photos || []).some((p) => p.orderId === order.id && p.kind === 'AFTER');
+            if (!inBatch) {
+              const { data: saved } = await sb.from('order_photos').select('id').eq('order_id', order.id).eq('kind', 'AFTER').limit(1);
+              if (!saved || saved.length === 0) {
+                result.rejected.push(`${order.reference}: take a photo of the clean car at its bay before marking it ready`);
+                continue;
+              }
+            }
+          }
         } else if (!isAdmin) {
           // Same status from a non-admin: nothing to save for this order
           continue;
@@ -1458,6 +1470,8 @@ async function validateEmployeeBatch(
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(ph.id)) errors.push('photo: bad id');
     if (!/^data:image\/(?:jpeg|jpg|png|webp|heic);base64,/i.test(ph.blobKey) && !/^https?:\/\//.test(ph.blobKey)) errors.push('photo: not an image');
     if (ph.blobKey.length > MAX_PHOTO_CHARS) errors.push('photo: the image is too large');
+    // A customer adds only the photo of their own car when ordering; the "clean car at its bay" photo is the team's
+    if (ph.kind && ph.kind !== 'BEFORE') errors.push('photo: only the team adds this photo');
   }
   for (const ev of changes.orderEvents || []) {
     if (!isMyOrder(ev.orderId) || ev.actor.id !== me || (evOwners.has(ev.id) && evOwners.get(ev.id) !== ev.orderId)) errors.push('timeline: not yours');

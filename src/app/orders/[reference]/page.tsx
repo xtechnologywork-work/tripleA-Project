@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { mockStore } from '@/data/mock/store';
 import { Order, OrderEvent, OrderPhoto } from '@/domain/types';
 import { formatDateTime, formatQAR, plateLabel, readyPlace, serviceName } from '@/lib/utils';
+import { customerPhotos, readyPhotoOf } from '@/domain/ready-photo';
 import { SUPPORT_WHATSAPP } from '@/lib/support';
 import { clockLabel } from '@/domain/ordering';
 import { TOTAL_BAYS } from '@/data/mock/seed';
@@ -498,8 +499,47 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
             </div>
           )}
 
+          {/* The clean car at its bay: taken by the team when the car is ready */}
+          {readyPlace(order) && readyPhotoOf(photos)?.blobKey && (
+            <div className={`${tile} p-5 space-y-3`}>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[14px] font-semibold text-ink flex items-center gap-2">
+                  <Camera className="h-4 w-4 text-body" />
+                  <span>{isRtl ? 'سيارتك نظيفة في موقفها' : 'Your clean car at its bay'}</span>
+                </span>
+                <span className="text-sm text-emerald-400 tabular-nums">
+                  {readyPlace(order)!.floor} · {readyPlace(order)!.bay}
+                </span>
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setLightboxPhoto(readyPhotoOf(photos)!.blobKey)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setLightboxPhoto(readyPhotoOf(photos)!.blobKey);
+                  }
+                }}
+                className="relative rounded-2xl overflow-hidden h-56 bg-black/50 group cursor-pointer"
+              >
+                <SafeImage
+                  src={readyPhotoOf(photos)!.blobKey}
+                  alt={isRtl ? 'سيارتك نظيفة في موقفها' : 'Your clean car at its bay'}
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                />
+                <div className="absolute inset-0 bg-black/25 group-hover:bg-black/10 transition flex items-center justify-center">
+                  <span className="px-4 py-1.5 rounded-full bg-black/70 backdrop-blur-md text-white text-sm flex items-center gap-2">
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    <span>{isRtl ? 'اضغط لتكبير الصورة' : 'Tap to enlarge'}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Photo */}
-          {photos.length > 0 && (
+          {customerPhotos(photos).length > 0 && (
             <div className={`${tile} p-5 space-y-3`}>
               <div className="flex items-center justify-between">
                 <span className="text-[14px] font-semibold text-ink flex items-center gap-2">
@@ -512,17 +552,17 @@ function OrderTrackingContent({ params }: { params: Promise<{ reference: string 
               <div
                 role="button"
                 tabIndex={0}
-                onClick={() => setLightboxPhoto(photos[0].blobKey)}
+                onClick={() => setLightboxPhoto(customerPhotos(photos)[0].blobKey)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    setLightboxPhoto(photos[0].blobKey);
+                    setLightboxPhoto(customerPhotos(photos)[0].blobKey);
                   }
                 }}
                 className="relative rounded-2xl overflow-hidden h-52 bg-black/50 group cursor-pointer"
               >
                 <SafeImage
-                  src={photos[0].blobKey}
+                  src={customerPhotos(photos)[0].blobKey}
                   alt={isRtl ? 'صورة مؤخرة السيارة' : 'Rear of the car'}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />

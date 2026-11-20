@@ -16,6 +16,8 @@ import { TowerBays } from '@/components/admin/tower-bays';
 import { SettingsPage } from '@/components/admin/settings-page';
 import { AddClientDialog } from '@/components/admin/add-client-dialog';
 import { WhatsAppButtons } from '@/components/admin/whatsapp-buttons';
+import { customerPhotos, readyPhotoOf } from '@/domain/ready-photo';
+import { compressImage } from '@/lib/image';
 import { clientIdLine, isQidClient } from '@/domain/clients';
 import { VipBadge } from '@/components/ui/vip-badge';
 import { sortQueue } from '@/domain/queue';
@@ -101,6 +103,9 @@ export default function AdminDashboardPage() {
   const [qcNotes] = useState('');
   // Where the clean car is parked: floor (B3 by default) and the exact bay number
   const [returnOverrideBay, setReturnOverrideBay] = useState('');
+  // The photo of the clean car at its bay: required to mark the order ready
+  const [readyPhoto, setReadyPhoto] = useState<string | null>(null);
+  const [readyPhotoBusy, setReadyPhotoBusy] = useState(false);
   const [returnFloor, setReturnFloor] = useState('B3');
 
   // Modals state
@@ -432,7 +437,9 @@ export default function AdminDashboardPage() {
 
   const selectedOrder = orders.find((o) => o.id === selectedOrderId) || filteredOrders[0] || null;
   const selectedOrderClient = selectedOrder ? employees.find((e) => e.id === selectedOrder.employeeId) : null;
-  const selectedOrderPhotos = selectedOrder ? mockStore.getOrderPhotos(selectedOrder.id) : [];
+  const selectedOrderAllPhotos = selectedOrder ? mockStore.getOrderPhotos(selectedOrder.id) : [];
+  const selectedOrderPhotos = customerPhotos(selectedOrderAllPhotos);
+  const selectedReadyPhoto = readyPhotoOf(selectedOrderAllPhotos);
   const selectedOrderEvents = selectedOrder ? mockStore.getOrderEvents(selectedOrder.id) : [];
 
   // Sync inputs with selected order
@@ -444,6 +451,7 @@ export default function AdminDashboardPage() {
       }
       setReturnOverrideBay('');
       setReturnFloor('B3');
+      setReadyPhoto(null);
     }
   }, [selectedOrder?.id]);
 
@@ -510,6 +518,10 @@ export default function AdminDashboardPage() {
           showToast(`Type the floor and the bay number (1 to ${TOTAL_BAYS}) where the car was left`);
           return;
         }
+        if (!readyPhoto) {
+          showToast('Take a photo of the clean car at its bay first');
+          return;
+        }
         const targetBayCode = String(bayNumber);
         payload.returnConfirmation = {
           floor,
@@ -541,7 +553,12 @@ export default function AdminDashboardPage() {
         role: 'SUPERADMIN',
       };
 
+      // The ready photo is saved first: the server refuses "ready at bay" without it
+      if (toStatus === 'RETURNED_TO_PARKING' && readyPhoto) {
+        mockStore.addOrderPhoto(target.id, 'AFTER', readyPhoto, adminEmail || 'TripleA Team');
+      }
       mockStore.transitionOrder(target.id, toStatus, payload, adminOperator);
+      if (toStatus === 'RETURNED_TO_PARKING') setReadyPhoto(null);
       showToast(`Order ${target.reference} updated to ${toStatus}`);
       reloadData();
     } catch (err: unknown) {
@@ -1283,7 +1300,7 @@ export default function AdminDashboardPage() {
                     filteredOrders.map((ord) => {
                       const isSelected = selectedOrder?.id === ord.id;
                       const client = employees.find((e) => e.id === ord.employeeId);
-                      const photos = mockStore.getOrderPhotos(ord.id);
+                      const photos = customerPhotos(mockStore.getOrderPhotos(ord.id));
 
                       return (
                         <div
@@ -1425,7 +1442,7 @@ export default function AdminDashboardPage() {
                         next = {
                           to: 'RETURNED_TO_PARKING',
                           label: 'Mark ready at bay',
-                          hint: 'Type where the clean car was left. The customer is told it is ready and sees this place.',
+                          hint: 'Take a photo of the clean car at its bay and type where it was left. The customer is told it is ready and sees the photo and the place.',
                           open: open4,
                         };
                       } else if (st === 'ISSUE_REPORTED' && order.statusBeforeIssue) {
@@ -1493,7 +1510,19 @@ export default function AdminDashboardPage() {
 
                               {finished ? (
                                 <div className="rounded-2xl bg-emerald-400/10 p-4 flex items-center gap-3">
-                                  <CheckCircle2 className="h-5 w-5 text-emerald-300 flex-shrink-0" />
+                                  {selectedReadyPhoto?.blobKey ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setLightboxPhoto(selectedReadyPhoto.blobKey)}
+                                      className="w-20 h-14 rounded-xl overflow-hidden bg-fill flex-shrink-0 cursor-pointer"
+                                      aria-label="View the photo of the clean car at its bay"
+                                      title="Photo of the clean car at its bay"
+                                    >
+                                      <SafeImage src={selectedReadyPhoto.blobKey} alt="The clean car at its bay" className="w-full h-full object-cover" />
+                                    </button>
+                                  ) : (
+                                    <CheckCircle2 className="h-5 w-5 text-emerald-300 flex-shrink-0" />
+                                  )}
                                   <p className="text-sm text-emerald-300 font-medium">
                                     Ready at <span className="tabular-nums">{readyPlace(order) ? `${readyPlace(order)!.floor}, bay ${readyPlace(order)!.bay}` : `bay ${order.bayCodeSnapshot}`}</span>. The customer has been told.
                                   </p>
@@ -1530,13 +1559,80 @@ export default function AdminDashboardPage() {
                                         </label>
                                       </div>
                                     )}
+                                    {next.to === 'RETURNED_TO_PARKING' && next.open && (
+                                      <div className="mt-3 space-y-2">
+                                        <span className="text-xs text-dim block">Photo of the clean car at its bay (required)</span>
+                                        {readyPhoto ? (
+                                          <div className="flex items-center gap-3">
+                                            <button
+                                              type="button"
+                                              onClick={() => setLightboxPhoto(readyPhoto)}
+                                              className="w-24 h-16 rounded-xl overflow-hidden bg-fill flex-shrink-0 cursor-pointer"
+                                              aria-label="View the photo"
+                                            >
+                                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                                              <img src={readyPhoto} alt="The clean car at its bay" className="w-full h-full object-cover" />
+                                            </button>
+                                            <span className="text-sm text-emerald-300 flex items-center gap-1.5">
+                                              <Check className="h-4 w-4" /> Photo ready
+                                            </span>
+                                            <button
+                                              type="button"
+                                              onClick={() => setReadyPhoto(null)}
+                                              className="text-sm text-dim hover:text-ink cursor-pointer"
+                                            >
+                                              Retake
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <div className="flex flex-wrap gap-2">
+                                            {[
+                                              { label: 'Take photo', capture: true },
+                                              { label: 'Upload photo', capture: false },
+                                            ].map((b) => (
+                                              <label
+                                                key={b.label}
+                                                className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold cursor-pointer transition ${
+                                                  b.capture ? 'bg-[#0071e3] hover:bg-[#0077ed] text-white' : 'bg-fill hover:bg-fill-strong text-ink'
+                                                } ${readyPhotoBusy ? 'opacity-50 pointer-events-none' : ''}`}
+                                              >
+                                                {readyPhotoBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                                                {b.label}
+                                                <input
+                                                  type="file"
+                                                  accept="image/*"
+                                                  {...(b.capture ? { capture: 'environment' as const } : {})}
+                                                  className="sr-only"
+                                                  onChange={async (e) => {
+                                                    const file = e.target.files?.[0];
+                                                    e.target.value = '';
+                                                    if (!file) return;
+                                                    setReadyPhotoBusy(true);
+                                                    try {
+                                                      setReadyPhoto(await compressImage(file));
+                                                    } catch {
+                                                      showToast('That file is not a photo. Try again.');
+                                                    } finally {
+                                                      setReadyPhotoBusy(false);
+                                                    }
+                                                  }}
+                                                />
+                                              </label>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
                                   <button
                                     onClick={() => handleTransition(next.to)}
                                     disabled={
                                       !next.open ||
                                       (next.to === 'RETURNED_TO_PARKING' &&
-                                        (!returnFloor.trim() || !(parseInt(returnOverrideBay, 10) >= 1 && parseInt(returnOverrideBay, 10) <= TOTAL_BAYS)))
+                                        (!readyPhoto ||
+                                          readyPhotoBusy ||
+                                          !returnFloor.trim() ||
+                                          !(parseInt(returnOverrideBay, 10) >= 1 && parseInt(returnOverrideBay, 10) <= TOTAL_BAYS)))
                                     }
                                     className="w-full md:w-auto md:min-w-[200px] py-3 px-6 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white text-[15px] font-semibold transition active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
                                   >
