@@ -15,7 +15,9 @@ import { initialOf } from '@/domain/names';
 import { TowerBays } from '@/components/admin/tower-bays';
 import { SettingsPage } from '@/components/admin/settings-page';
 import { AddClientDialog } from '@/components/admin/add-client-dialog';
-import { WhatsAppButtons } from '@/components/admin/whatsapp-buttons';
+import { WhatsAppButtons, markWaOpened, waMessageFor } from '@/components/admin/whatsapp-buttons';
+import { useWaTemplates } from '@/lib/whatsapp-client';
+import { openWhatsApp, waResultText } from '@/lib/wa-open';
 import { customerPhotos, readyPhotoOf } from '@/domain/ready-photo';
 import { compressImage } from '@/lib/image';
 import { clientIdLine, isQidClient } from '@/domain/clients';
@@ -106,6 +108,16 @@ export default function AdminDashboardPage() {
   // The photo of the clean car at its bay: required to mark the order ready
   const [readyPhoto, setReadyPhoto] = useState<string | null>(null);
   const [readyPhotoBusy, setReadyPhotoBusy] = useState(false);
+  const [waAfterReady, setWaAfterReady] = useState(true);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- read the per-computer choice after mount
+      if (localStorage.getItem('triplea_wa_after_ready') === 'off') setWaAfterReady(false);
+    } catch {
+      // Private window: stays on
+    }
+  }, []);
+  const waTemplates = useWaTemplates();
   const [returnFloor, setReturnFloor] = useState('B3');
 
   // Modals state
@@ -146,9 +158,11 @@ export default function AdminDashboardPage() {
   const [clientSearchQuery, setClientSearchQuery] = useState('');
   const [clientSubFilter, setClientSubFilter] = useState<'ALL' | 'ACTIVE_SUB' | 'NO_SUB' | 'VIP' | 'QID'>('ALL');
 
-  const showToast = (msg: string) => {
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = (msg: string, ms = 3000) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMessage(null), ms);
   };
 
   // Reload all domain collections without resetting user's selected order
@@ -479,9 +493,9 @@ export default function AdminDashboardPage() {
   }, [employees, clientSearchQuery, clientSubFilter]);
 
   // Order Transition Handler
-  const handleTransition = (toStatus: OrderStatus, customAssigneeId?: string, note?: string, orderOverride?: Order) => {
+  const handleTransition = (toStatus: OrderStatus, customAssigneeId?: string, note?: string, orderOverride?: Order): boolean => {
     const target = orderOverride || selectedOrder;
-    if (!target) return;
+    if (!target) return false;
     try {
       const payload: Parameters<typeof mockStore.transitionOrder>[2] = {};
       if (toStatus === 'ASSIGNED') {
@@ -516,11 +530,11 @@ export default function AdminDashboardPage() {
         const floor = returnFloor.trim().toUpperCase().slice(0, 6);
         if (!Number.isInteger(bayNumber) || bayNumber < 1 || bayNumber > TOTAL_BAYS || !floor) {
           showToast(`Type the floor and the bay number (1 to ${TOTAL_BAYS}) where the car was left`);
-          return;
+          return false;
         }
         if (!readyPhoto) {
           showToast('Take a photo of the clean car at its bay first');
-          return;
+          return false;
         }
         const targetBayCode = String(bayNumber);
         payload.returnConfirmation = {
@@ -561,9 +575,26 @@ export default function AdminDashboardPage() {
       if (toStatus === 'RETURNED_TO_PARKING') setReadyPhoto(null);
       showToast(`Order ${target.reference} updated to ${toStatus}`);
       reloadData();
+      return true;
     } catch (err: unknown) {
       showToast(`Could not update: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
+  };
+
+  /** "Mark ready at bay": saves the photo and the place, then (when chosen) opens WhatsApp with the Ready message and the photo. */
+  const markReadyAndMessage = async (to: OrderStatus) => {
+    const order = selectedOrder;
+    if (!order) return;
+    // Taken before the move, which clears the photo field
+    const photo = readyPhoto;
+    const place = { floor: returnFloor.trim().toUpperCase().slice(0, 6), bayCode: String(parseInt(returnOverrideBay.replace(/\D/g, ''), 10)) };
+    const client = selectedOrderClient;
+    if (!handleTransition(to)) return;
+    if (!waAfterReady) return;
+    const result = await openWhatsApp({ phone: client?.phone, message: waMessageFor(waTemplates, 'READY', order, client, place), photo });
+    if (result.ok) markWaOpened(order.id, 'READY');
+    showToast(`Order ${order.reference} is ready. ${waResultText(result, !!photo)}`, 9000);
   };
 
   const openEditSub = (sub: EmployeeSubscription) => {
@@ -1621,11 +1652,27 @@ export default function AdminDashboardPage() {
                                             ))}
                                           </div>
                                         )}
+                                        <label className="flex items-center gap-2 pt-1 text-sm text-body cursor-pointer select-none w-fit">
+                                          <input
+                                            type="checkbox"
+                                            checked={waAfterReady}
+                                            onChange={(e) => {
+                                              setWaAfterReady(e.target.checked);
+                                              try {
+                                                localStorage.setItem('triplea_wa_after_ready', e.target.checked ? 'on' : 'off');
+                                              } catch {
+                                                // Private window: not remembered
+                                              }
+                                            }}
+                                            className="h-4 w-4 accent-emerald-500"
+                                          />
+                                          Then send the &quot;Ready at bay&quot; WhatsApp message with this photo
+                                        </label>
                                       </div>
                                     )}
                                   </div>
                                   <button
-                                    onClick={() => handleTransition(next.to)}
+                                    onClick={() => (next.to === 'RETURNED_TO_PARKING' ? void markReadyAndMessage(next.to) : handleTransition(next.to))}
                                     disabled={
                                       !next.open ||
                                       (next.to === 'RETURNED_TO_PARKING' &&
@@ -1661,6 +1708,7 @@ export default function AdminDashboardPage() {
                         order={selectedOrder}
                         client={selectedOrderClient}
                         inspectionSubmitted={selectedBefore?.status === 'SUBMITTED'}
+                        readyPhoto={selectedReadyPhoto?.blobKey || undefined}
                       />
                     )}
 

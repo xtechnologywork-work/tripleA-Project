@@ -3,10 +3,12 @@
 import React, { useEffect, useState } from 'react';
 import { Check, MessageCircle } from 'lucide-react';
 import type { Employee, Order } from '@/domain/types';
-import { WA_STAGES, WA_STAGE_LABEL, fillWaTemplate, waLink, waStagesReached, type WaStage } from '@/domain/whatsapp';
+import { WA_STAGES, WA_STAGE_LABEL, fillWaTemplate, waLink, waStagesReached, type WaStage, type WaTemplates } from '@/domain/whatsapp';
 import { useWaTemplates } from '@/lib/whatsapp-client';
+import { openWhatsApp, waResultText } from '@/lib/wa-open';
 
 const SENT_KEY = 'triplea_wa_opened';
+const CHANGED = 'triplea-wa-opened';
 
 /** Which messages were already opened on this computer, per order (a reminder for the team, not a record). */
 function readOpened(): Record<string, WaStage[]> {
@@ -18,7 +20,8 @@ function readOpened(): Record<string, WaStage[]> {
   }
 }
 
-function markOpened(orderId: string, stage: WaStage): Record<string, WaStage[]> {
+/** Notes that a message was opened for an order (also used by "Mark ready at bay", which opens the Ready message). */
+export function markWaOpened(orderId: string, stage: WaStage): void {
   const all = readOpened();
   const list = new Set(all[orderId] || []);
   list.add(stage);
@@ -31,21 +34,62 @@ function markOpened(orderId: string, stage: WaStage): Record<string, WaStage[]> 
   } catch {
     // Private window: the reminder is simply not kept
   }
-  return all;
+  window.dispatchEvent(new Event(CHANGED));
+}
+
+/** The message for one step, filled in with the order's details. `ready` gives the place when it was just typed. */
+export function waMessageFor(
+  templates: WaTemplates,
+  stage: WaStage,
+  order: Order,
+  client: Employee | null | undefined,
+  ready?: { floor?: string; bayCode?: string }
+): string {
+  const place = ready || (order.status === 'RETURNED_TO_PARKING' ? order.returnConfirmation : undefined);
+  return fillWaTemplate(templates[stage], {
+    name: client?.fullName || '',
+    reference: order.reference,
+    parkingBay: order.bayCodeSnapshot,
+    floor: place?.floor || '',
+    readyBay: place?.bayCode || '',
+    service: order.serviceSnapshot?.name || '',
+  });
 }
 
 /**
  * One WhatsApp button per step of the order. A button opens once the order reached that step; pressing it opens
  * the customer's WhatsApp chat with the message from Settings, filled in with this order's details.
+ * "Ready at bay" also brings the photo of the clean car (see openWhatsApp).
  */
-export function WhatsAppButtons({ order, client, inspectionSubmitted }: { order: Order; client: Employee | null | undefined; inspectionSubmitted: boolean }) {
+export function WhatsAppButtons({
+  order,
+  client,
+  inspectionSubmitted,
+  readyPhoto,
+}: {
+  order: Order;
+  client: Employee | null | undefined;
+  inspectionSubmitted: boolean;
+  /** The photo of the clean car at its bay, once taken */
+  readyPhoto?: string;
+}) {
   const templates = useWaTemplates();
   const [opened, setOpened] = useState<Record<string, WaStage[]>>({});
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- read the per-computer reminder after mount
-    setOpened(readOpened());
+    const refresh = () => setOpened(readOpened());
+    refresh();
+    window.addEventListener(CHANGED, refresh);
+    return () => window.removeEventListener(CHANGED, refresh);
   }, []);
+
+  // A new order on screen: the last note was about another one
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear the note when another order is opened
+    setNote(null);
+  }, [order.id]);
 
   if (order.status === 'CANCELLED') return null;
 
@@ -53,25 +97,18 @@ export function WhatsAppButtons({ order, client, inspectionSubmitted }: { order:
   // The newest step reached is the one to send now
   const latest = [...WA_STAGES].reverse().find((s) => reached[s]);
   const phone = client?.phone;
-  const ready = order.status === 'RETURNED_TO_PARKING' ? order.returnConfirmation : undefined;
 
-  const open = (stage: WaStage) => {
-    const message = fillWaTemplate(templates[stage], {
-      name: client?.fullName || '',
-      reference: order.reference,
-      parkingBay: order.bayCodeSnapshot,
-      floor: ready?.floor || '',
-      readyBay: ready?.bayCode || '',
-      service: order.serviceSnapshot?.name || '',
-    });
-    // A phone opens the WhatsApp app; a computer opens WhatsApp Web straight on the chat, always in the same tab
-    // (WhatsApp Web refuses to run in two tabs at once)
-    const onPhone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-    const link = waLink(phone, message, onPhone ? 'app' : 'web');
-    if (!link) return;
-    const tab = window.open(link, onPhone ? '_blank' : 'triplea_whatsapp');
-    if (tab) tab.opener = null;
-    setOpened(markOpened(order.id, stage));
+  const open = async (stage: WaStage) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const photo = stage === 'READY' ? readyPhoto : undefined;
+      const result = await openWhatsApp({ phone, message: waMessageFor(templates, stage, order, client), photo });
+      if (result.ok) markWaOpened(order.id, stage);
+      setNote({ ok: result.ok, text: waResultText(result, !!photo) });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const sentHere = opened[order.id] || [];
@@ -98,9 +135,15 @@ export function WhatsAppButtons({ order, client, inspectionSubmitted }: { order:
             return (
               <button
                 key={s}
-                onClick={() => open(s)}
-                disabled={!can}
-                title={can ? `Open WhatsApp with the "${WA_STAGE_LABEL[s]}" message` : 'Opens when the order reaches this step'}
+                onClick={() => void open(s)}
+                disabled={!can || busy}
+                title={
+                  !can
+                    ? 'Opens when the order reaches this step'
+                    : s === 'READY' && readyPhoto
+                      ? 'Open WhatsApp with the Ready message and the photo of the clean car'
+                      : `Open WhatsApp with the "${WA_STAGE_LABEL[s]}" message`
+                }
                 className={`relative px-3 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer flex items-center justify-center gap-1.5 disabled:cursor-not-allowed ${
                   !can
                     ? 'bg-fill text-dim opacity-50'
@@ -116,8 +159,14 @@ export function WhatsAppButtons({ order, client, inspectionSubmitted }: { order:
           })}
         </div>
       )}
+      {note && (
+        <p role="status" className={`text-sm leading-relaxed ${note.ok ? 'text-emerald-300' : 'text-amber-300'}`}>
+          {note.text}
+        </p>
+      )}
       <p className="text-xs text-dim leading-relaxed">
-        Opens WhatsApp with the message written in. Check it and press Send there. The messages are edited in Settings.
+        Opens WhatsApp with the message written in. Check it and press Send there. &quot;Ready at bay&quot; also brings the photo of the clean car. The
+        messages are edited in Settings.
       </p>
     </div>
   );
