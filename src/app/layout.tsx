@@ -44,8 +44,10 @@ export default function RootLayout({
           }}
         />
       </head>
+      {/* Browser extensions (ColorZilla, Grammarly, ...) add attributes to <body> before React loads; ignore those on this one tag only */}
       <body
         className={`${inter.variable} antialiased min-h-screen bg-canvas text-ink font-sans`}
+        suppressHydrationWarning
       >
         <ViewportLock />
         <ThemeProvider>
