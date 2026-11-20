@@ -1578,9 +1578,16 @@ function BayOrderingClientScreen() {
                         </div>
                       )}
                       <p className="text-sm text-muted tabular-nums" dir="ltr">{currentEmployee?.phone || employeePhone}</p>
-                      <p className="text-sm text-muted tabular-nums">
-                        {t('employeeNoLabel')}: {currentEmployee?.employeeNo}
-                      </p>
+                      {/* A client added by the team has a QID instead of an employee number */}
+                      {currentEmployee?.employeeNo ? (
+                        <p className="text-sm text-muted tabular-nums">
+                          {t('employeeNoLabel')}: {currentEmployee.employeeNo}
+                        </p>
+                      ) : currentEmployee?.qid ? (
+                        <p className="text-sm text-muted tabular-nums">
+                          {t('qidLabel')}: {currentEmployee.qid}
+                        </p>
+                      ) : null}
                     </div>
                     <button
                       onClick={() => setIsEditingProfile(true)}

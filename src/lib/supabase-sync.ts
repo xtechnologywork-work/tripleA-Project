@@ -3,6 +3,7 @@ import { getServerSupabase, hasServiceKey } from './supabase-server';
 import { MockDatabase, TOTAL_BAYS } from '../data/mock/seed';
 import { isValidStaffTransition, isCustomerMove } from '../domain/status-machine';
 import { withTitle } from '../domain/names';
+import { isQidClient } from '../domain/clients';
 import { myFatoorahConfig } from './myfatoorah';
 import { currentOrdering } from './ordering-settings';
 import { loadVipIds } from './vip-settings';
@@ -124,6 +125,14 @@ export async function employeeNoTaken(employeeNo: string): Promise<boolean> {
   return (data || []).length > 0;
 }
 
+/** Is this QID already used by another account? (One QID, one account.) */
+export async function qidTaken(qid: string, exceptId?: string): Promise<boolean> {
+  const sb = getServerSupabase();
+  if (!sb) return false;
+  const { data } = await sb.from('employees').select('id').eq('qid', qid).limit(2);
+  return (data || []).some((r: Row) => String(r.id) !== exceptId);
+}
+
 export async function createEmployee(employee: Employee): Promise<{ ok: boolean; error?: string; taken?: boolean }> {
   const sb = getServerSupabase();
   if (!sb) return { ok: false, error: 'Supabase is not configured' };
@@ -137,7 +146,7 @@ export async function createEmployee(employee: Employee): Promise<{ ok: boolean;
     company: employee.company || 'Ministry of Commerce and Industry - State of Qatar',
     status: 'ACTIVE',
   });
-  if (error) return { ok: false, error: error.message, taken: error.code === '23505' && /employee_no/i.test(`${error.message} ${error.details || ''}`) };
+  if (error) return { ok: false, error: error.message, taken: error.code === '23505' && /employee_no|qid|employees_pkey/i.test(`${error.message} ${error.details || ''}`) };
   return { ok: true };
 }
 
@@ -1264,6 +1273,16 @@ async function validateEmployeeBatch(
       if (digits.length < 8 || digits.length > 15) errors.push('profile: phone number is not valid');
       if (qid.length > 11) errors.push('profile: QID is too long');
       const current = mapEmployeeRow(myRow);
+      // A client added by the team is known by their QID: only the team can change it
+      if (isQidClient(current) && qid !== (current.qid || '')) {
+        errors.push('profile: your QID can only be changed by the TripleA team');
+        continue;
+      }
+      // One QID, one account
+      if (qid && qid !== (current.qid || '') && (await qidTaken(qid, me))) {
+        errors.push('profile: this QID belongs to another account');
+        continue;
+      }
       // A mobile number can belong to one account only: sign in finds people by it
       const newLast8 = digits.slice(-8);
       const oldLast8 = (current.phone || '').replace(/\D/g, '').slice(-8);

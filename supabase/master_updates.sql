@@ -2,7 +2,8 @@
 -- TripleA: MASTER UPDATES. Paste all of this in the Supabase SQL editor and press Run.
 --
 -- What it does: brings an existing TripleA database up to date with everything the app needs
--- (dashboard columns and tables, inspections, SMS codes, online payments).
+-- (dashboard columns and tables, inspections, SMS codes, online payments,
+--  one account per employee number, one account per QID).
 --
 -- It is SAFE TO RUN MORE THAN ONCE: every statement says "if it does not exist yet", and nothing is deleted.
 -- It leaves out, on purpose:
@@ -10,8 +11,9 @@
 --   * migration_v2_lockdown.sql : the security lockdown. Run it yourself, once, at the very end.
 --   * the open policies of the first dashboard migration: so running this after the lockdown never re-opens anything.
 --
--- The newer features (ordering hours, VIP clients, names, passes) need NO SQL: the app keeps them in
--- Supabase Storage and in the tables below. The result of the checks is shown at the bottom.
+-- The newer features (ordering hours, VIP clients, SMS code switch, names, passes) need NO SQL: the app keeps
+-- them in Supabase Storage and in the tables below. The result of the checks is shown at the bottom.
+-- Also left out: reset_all_data.sql (it EMPTIES the data; run it only when you want to start from zero).
 -- ==============================================================================
 
 
@@ -168,6 +170,33 @@ ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
 
 
 -- ------------------------------------------------------------------------------
+-- 5. One account per employee number, one account per QID
+--    (clients added by the team have a QID and no employee number)
+-- ------------------------------------------------------------------------------
+-- The app already refuses a second account with the same number; these make the database refuse it too,
+-- even when two people try in the very same moment. If duplicates already exist, the rule is not added
+-- (nothing fails, nothing is deleted) and the check at the bottom says which number to fix first.
+
+CREATE INDEX IF NOT EXISTS idx_employees_qid ON public.employees (qid);
+
+DO $
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.employees WHERE employee_no IS NOT NULL GROUP BY employee_no HAVING count(*) > 1) THEN
+        RAISE NOTICE 'Duplicate employee numbers exist: unique rule not added. Fix them, then run this file again.';
+    ELSE
+        CREATE UNIQUE INDEX IF NOT EXISTS employees_employee_no_unique ON public.employees (employee_no) WHERE employee_no IS NOT NULL;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM public.employees WHERE qid IS NOT NULL AND qid <> '' GROUP BY qid HAVING count(*) > 1) THEN
+        RAISE NOTICE 'Duplicate QIDs exist: unique rule not added. Fix them, then run this file again.';
+    ELSE
+        CREATE UNIQUE INDEX IF NOT EXISTS employees_qid_unique ON public.employees (qid) WHERE qid IS NOT NULL AND qid <> '';
+    END IF;
+END $;
+
+
+
+-- ------------------------------------------------------------------------------
 -- CHECK: every line below should say OK
 -- ------------------------------------------------------------------------------
 SELECT 'orders: cancellation, version, status_before_issue' AS check_name,
@@ -180,4 +209,14 @@ SELECT 'order_events: type, payload',
 UNION ALL
 SELECT 'table ' || t,
        CASE WHEN to_regclass('public.' || t) IS NOT NULL THEN 'OK' ELSE 'MISSING' END
-FROM unnest(ARRAY['issues', 'audit_logs', 'inspections', 'otp_events', 'payments']) AS t;
+FROM unnest(ARRAY['issues', 'audit_logs', 'inspections', 'otp_events', 'payments']) AS t
+UNION ALL
+SELECT 'one account per employee number',
+       CASE WHEN to_regclass('public.employees_employee_no_unique') IS NOT NULL THEN 'OK'
+            ELSE 'NOT ADDED - duplicates: ' || coalesce((SELECT string_agg(employee_no, ', ') FROM (SELECT employee_no FROM public.employees
+                 WHERE employee_no IS NOT NULL GROUP BY employee_no HAVING count(*) > 1) d), 'none') END
+UNION ALL
+SELECT 'one account per QID',
+       CASE WHEN to_regclass('public.employees_qid_unique') IS NOT NULL THEN 'OK'
+            ELSE 'NOT ADDED - duplicates: ' || coalesce((SELECT string_agg(qid, ', ') FROM (SELECT qid FROM public.employees
+                 WHERE qid IS NOT NULL AND qid <> '' GROUP BY qid HAVING count(*) > 1) d), 'none') END;

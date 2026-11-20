@@ -14,6 +14,8 @@ import { awaitingOnlinePayment, reorderTimes } from '@/domain/analytics';
 import { initialOf } from '@/domain/names';
 import { TowerBays } from '@/components/admin/tower-bays';
 import { SettingsPage } from '@/components/admin/settings-page';
+import { AddClientDialog } from '@/components/admin/add-client-dialog';
+import { clientIdLine, isQidClient } from '@/domain/clients';
 import { VipBadge } from '@/components/ui/vip-badge';
 import { sortQueue } from '@/domain/queue';
 import { InspectionCard, InspectionViewer } from '@/components/inspection/inspection-card';
@@ -58,6 +60,7 @@ import {
   KeyRound,
   LogOut,
   Loader2,
+  Plus,
 } from 'lucide-react';
 
 type AdminTab = 'DISPATCH' | 'CLIENTS' | 'SUBSCRIPTIONS' | 'BAYS' | 'QR' | 'INSIGHTS' | 'SETTINGS';
@@ -121,6 +124,7 @@ export default function AdminDashboardPage() {
   const [inspectionFlow, setInspectionFlow] = useState<{ phase: 'BEFORE' | 'AFTER'; editing: boolean } | null>(null);
   const [inspectionViewOpen, setInspectionViewOpen] = useState(false);
   const [clientPanelId, setClientPanelId] = useState<string | null>(null);
+  const [addClientOpen, setAddClientOpen] = useState(false);
 
   // In-app dialogs (replace the browser's confirm / prompt boxes)
   type AdminDialog = { kind: 'cancel' | 'qc' | 'issue' | 'cancelSub' | 'skipInspection' | 'markPaid'; subId?: string } | null;
@@ -134,7 +138,7 @@ export default function AdminDashboardPage() {
 
   // Client Directory Filters
   const [clientSearchQuery, setClientSearchQuery] = useState('');
-  const [clientSubFilter, setClientSubFilter] = useState<'ALL' | 'ACTIVE_SUB' | 'NO_SUB' | 'VIP'>('ALL');
+  const [clientSubFilter, setClientSubFilter] = useState<'ALL' | 'ACTIVE_SUB' | 'NO_SUB' | 'VIP' | 'QID'>('ALL');
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -412,7 +416,8 @@ export default function AdminDashboardPage() {
         (o.vehicleSnapshot.make || '').toLowerCase().includes(q) ||
         (client?.fullName || '').toLowerCase().includes(q) ||
         (client?.phone || '').includes(q) ||
-        (client?.employeeNo || '').includes(q);
+        (client?.employeeNo || '').includes(q) ||
+        (client?.qid || '').includes(q);
 
       const matchesStatus = statusFilter === 'ALL' || o.status === statusFilter;
       const matchesZone = zoneFilter === 'ALL' || o.zoneCodeSnapshot === zoneFilter;
@@ -449,8 +454,8 @@ export default function AdminDashboardPage() {
         !q ||
         emp.fullName.toLowerCase().includes(q) ||
         (emp.phone || '').includes(q) ||
-        (emp.employeeNo || '').includes(q) ||
-        (emp.employeeNo || '').toLowerCase().includes(q);
+        (emp.employeeNo || '').toLowerCase().includes(q) ||
+        (emp.qid || '').includes(q);
 
       const sub = mockStore.getEmployeeSubscription(emp.id);
       const hasActiveSub = sub && sub.status === 'ACTIVE';
@@ -458,6 +463,7 @@ export default function AdminDashboardPage() {
       if (clientSubFilter === 'ACTIVE_SUB' && !hasActiveSub) return false;
       if (clientSubFilter === 'NO_SUB' && hasActiveSub) return false;
       if (clientSubFilter === 'VIP' && !emp.vip) return false;
+      if (clientSubFilter === 'QID' && !isQidClient(emp)) return false;
 
       return matchesSearch;
     });
@@ -547,7 +553,7 @@ export default function AdminDashboardPage() {
     setEsForm({
       name: client?.fullName || '',
       phone: client?.phone || '',
-      employeeNo: client?.employeeNo || '',
+      employeeNo: (isQidClient(client) ? client?.qid : client?.employeeNo) || '',
       left: mockStore.getCreditBalance(sub.employeeId),
       expiry: sub.expiresAt ? sub.expiresAt.slice(0, 10) : '',
       status: sub.status,
@@ -565,7 +571,11 @@ export default function AdminDashboardPage() {
     const left = Number(esForm.left);
     if (name.length < 2 || name.length > 80) return setEsError('Name must be 2 to 80 characters');
     if (digits.length < 8 || digits.length > 15) return setEsError('Phone number is not valid');
-    if (!/^[\w-]{1,20}$/.test(number)) return setEsError('Employee number is not valid');
+    const editingQid = isQidClient(employees.find((e) => e.id === editSub.employeeId));
+    if (editingQid) {
+      if (!/^[23]\d{10}$/.test(number)) return setEsError('The QID must be exactly 11 digits, starting with 2 or 3');
+      if (employees.some((e) => e.id !== editSub.employeeId && e.qid === number)) return setEsError('This QID belongs to another client');
+    } else if (!/^[\w-]{1,20}$/.test(number)) return setEsError('Employee number is not valid');
     if (!Number.isInteger(left) || left < 0 || left > 99) return setEsError('Washes left must be a whole number from 0 to 99');
     if (esForm.expiry && Number.isNaN(new Date(esForm.expiry).getTime())) return setEsError('End date is not valid');
     const current = mockStore.getCreditBalance(editSub.employeeId);
@@ -574,7 +584,11 @@ export default function AdminDashboardPage() {
 
     try {
       const emp = employees.find((e) => e.id === editSub.employeeId);
-      if (emp && (emp.fullName !== name || emp.phone !== esForm.phone.trim() || (emp.employeeNo || '') !== number)) {
+      if (emp && editingQid) {
+        if (emp.fullName !== name || emp.phone !== esForm.phone.trim() || (emp.qid || '') !== number) {
+          mockStore.updateEmployee(emp.id, { fullName: name, phone: esForm.phone.trim(), qid: number });
+        }
+      } else if (emp && (emp.fullName !== name || emp.phone !== esForm.phone.trim() || (emp.employeeNo || '') !== number)) {
         mockStore.updateEmployee(emp.id, { fullName: name, phone: esForm.phone.trim(), employeeNo: number });
       }
       mockStore.updateSubscription(
@@ -813,12 +827,14 @@ export default function AdminDashboardPage() {
   };
 
   const exportClientsCsv = () => {
-    const header = ['Name', 'Employee number', 'Phone', 'Company', 'VIP', 'Pass', 'Wash balance', 'Orders'];
+    const header = ['Name', 'Type', 'Employee number', 'QID', 'Phone', 'Company', 'VIP', 'Pass', 'Wash balance', 'Orders'];
     const rows = filteredClients.map((emp) => {
       const sub = mockStore.getEmployeeSubscription(emp.id);
       return [
         emp.fullName,
+        isQidClient(emp) ? 'QID client' : 'Employee',
         emp.employeeNo || '',
+        emp.qid || '',
         emp.phone || '',
         emp.company || '',
         emp.vip ? 'VIP' : '',
@@ -1561,9 +1577,9 @@ export default function AdminDashboardPage() {
                           </div>
                           <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div className="rounded-2xl bg-inset p-4">
-                              <dt className={subtle}>Employee number</dt>
+                              <dt className={subtle}>{isQidClient(selectedOrderClient) ? 'QID' : 'Employee number'}</dt>
                               <dd className="mt-1 text-[14px] text-ink font-medium tabular-nums">
-                                {selectedOrderClient?.employeeNo || <span className="text-dim">—</span>}
+                                {clientIdLine(selectedOrderClient)?.value || <span className="text-dim">—</span>}
                               </dd>
                             </div>
                             <div className="rounded-2xl bg-inset p-4">
@@ -1822,7 +1838,7 @@ export default function AdminDashboardPage() {
                     <Search className="h-4 w-4 text-dim flex-shrink-0" />
                     <input
                       type="text"
-                      placeholder="Search by client name, Qatar mobile, or employee ID..."
+                      placeholder="Search by client name, Qatar mobile, employee ID or QID..."
                       value={clientSearchQuery}
                       onChange={(e) => setClientSearchQuery(e.target.value)}
                       className="w-full bg-transparent text-sm text-ink placeholder-dim outline-none"
@@ -1836,17 +1852,24 @@ export default function AdminDashboardPage() {
 
                   <select
                     value={clientSubFilter}
-                    onChange={(e) => setClientSubFilter(e.target.value as 'ALL' | 'ACTIVE_SUB' | 'NO_SUB' | 'VIP')}
+                    onChange={(e) => setClientSubFilter(e.target.value as 'ALL' | 'ACTIVE_SUB' | 'NO_SUB' | 'VIP' | 'QID')}
                     className="bg-tile rounded-full px-4 py-2.5 text-sm text-body outline-none"
                   >
                     <option value="ALL">All Clients ({employees.length})</option>
                     <option value="ACTIVE_SUB">Active 140 QAR Passes ({metrics.activeSubscribers})</option>
                     <option value="NO_SUB">No Active Pass</option>
                     <option value="VIP">VIP clients ({employees.filter((e) => e.vip).length})</option>
+                    <option value="QID">QID clients, no employee no ({employees.filter((e) => isQidClient(e)).length})</option>
                   </select>
                 </div>
 
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setAddClientOpen(true)}
+                    className="px-4 py-2 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-sm font-semibold text-white flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4" /> Add client
+                  </button>
                   <button
                     onClick={exportClientsCsv}
                     disabled={filteredClients.length === 0}
@@ -1896,8 +1919,16 @@ export default function AdminDashboardPage() {
                                       {emp.vip && <VipBadge />}
                                     </span>
                                     <div className="flex items-center gap-2 mt-0.5 text-xs text-dim tabular-nums">
-                                      <span>{emp.employeeNo || `MOCI-${(emp.phone || '').slice(-4)}`}</span>
-                                      {emp.employeeNo && <span>Employee no: {emp.employeeNo}</span>}
+                                      {clientIdLine(emp) ? (
+                                        <span>
+                                          {clientIdLine(emp)!.label}: {clientIdLine(emp)!.value}
+                                        </span>
+                                      ) : (
+                                        <span>MOCI-{(emp.phone || '').slice(-4)}</span>
+                                      )}
+                                      {isQidClient(emp) && (
+                                        <span className="px-1.5 py-0.5 rounded-md bg-fill text-[10px] font-semibold text-body">Added by admin</span>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -2055,7 +2086,11 @@ export default function AdminDashboardPage() {
                                 <span className="font-semibold text-ink block">{client?.fullName || 'Ministry Staff'}</span>
                                 <div className="flex items-center gap-2 mt-0.5 text-xs text-dim tabular-nums">
                                   <span>{sub.id}</span>
-                                  {client?.employeeNo && <span>Employee no: {client.employeeNo}</span>}
+                                  {clientIdLine(client) && (
+                                    <span>
+                                      {clientIdLine(client)!.label}: {clientIdLine(client)!.value}
+                                    </span>
+                                  )}
                                 </div>
                                 {earlier.length > 0 && (
                                   <span className="block mt-1 text-xs text-dim">
@@ -2173,7 +2208,8 @@ export default function AdminDashboardPage() {
               <div className="min-w-0">
                 <h3 className="text-xl font-semibold text-ink tracking-tight truncate">{panelClient.fullName}</h3>
                 <p className="text-sm text-dim tabular-nums">
-                  {panelClient.employeeNo || ''} {panelClient.status === 'SUSPENDED' ? '· Suspended' : ''}
+                  {clientIdLine(panelClient)?.value || ''} {isQidClient(panelClient) ? `· ${panelClient.company || 'Added by admin'}` : ''}{' '}
+                  {panelClient.status === 'SUSPENDED' ? '· Suspended' : ''}
                 </p>
               </div>
               <button
@@ -2191,8 +2227,8 @@ export default function AdminDashboardPage() {
                 <dd className="mt-1 text-ink tabular-nums">{panelClient.phone || '—'}</dd>
               </div>
               <div className="rounded-2xl bg-tile p-4">
-                <dt className="text-xs text-dim">Employee number</dt>
-                <dd className="mt-1 text-ink tabular-nums">{panelClient.employeeNo || '—'}</dd>
+                <dt className="text-xs text-dim">{isQidClient(panelClient) ? 'QID' : 'Employee number'}</dt>
+                <dd className="mt-1 text-ink tabular-nums">{clientIdLine(panelClient)?.value || '—'}</dd>
               </div>
               <div className="rounded-2xl bg-tile p-4">
                 <dt className="text-xs text-dim">Wash balance</dt>
@@ -2393,7 +2429,7 @@ export default function AdminDashboardPage() {
                       <span className="min-w-0">
                         <span className="text-sm font-semibold text-ink block truncate">{c.fullName}</span>
                         <span className="text-xs text-dim block truncate tabular-nums">
-                          {c.employeeNo || ''} {c.phone ? `· ${c.phone}` : ''}
+                          {clientIdLine(c)?.value || ''} {c.phone ? `· ${c.phone}` : ''}
                         </span>
                       </span>
                       <Users className="h-4 w-4 text-dim flex-shrink-0" />
@@ -2449,6 +2485,18 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
+      {addClientOpen && (
+        <AddClientDialog
+          onClose={() => setAddClientOpen(false)}
+          onAdded={async (employee) => {
+            setAddClientOpen(false);
+            showToast(`${employee.fullName} added. They can sign in with ${employee.phone}.`);
+            await mockStore.syncFromServer(true);
+            reloadData();
+          }}
+        />
+      )}
+
       {/* ---------------------------------------------------------------------- */}
       {/* GRANT CREDIT MODAL                                                     */}
       {/* ---------------------------------------------------------------------- */}
@@ -2493,7 +2541,9 @@ export default function AdminDashboardPage() {
                   />
                 </div>
                 <div>
-                  <label className="text-body block mb-1.5" htmlFor="es-no">Employee number</label>
+                  <label className="text-body block mb-1.5" htmlFor="es-no">
+                    {isQidClient(employees.find((e) => e.id === editSub.employeeId)) ? 'QID' : 'Employee number'}
+                  </label>
                   <input
                     id="es-no"
                     type="text"
@@ -2610,8 +2660,10 @@ export default function AdminDashboardPage() {
               <div>
                 <span className="text-sm text-dim">Wash Balance Adjustment</span>
                 <h4 className="text-lg font-semibold text-ink tracking-tight mt-0.5">{creditModalClient.fullName}</h4>
-                {creditModalClient.employeeNo && (
-                  <span className="text-xs tabular-nums text-dim">Employee no: {creditModalClient.employeeNo}</span>
+                {clientIdLine(creditModalClient) && (
+                  <span className="text-xs tabular-nums text-dim">
+                    {clientIdLine(creditModalClient)!.label}: {clientIdLine(creditModalClient)!.value}
+                  </span>
                 )}
               </div>
               <button
@@ -2683,8 +2735,10 @@ export default function AdminDashboardPage() {
               <div>
                 <span className="text-sm text-dim">Wash Order History</span>
                 <h4 className="text-lg font-semibold text-ink tracking-tight mt-0.5">{historyModalClient.fullName}</h4>
-                {historyModalClient.employeeNo && (
-                  <span className="text-xs tabular-nums text-dim">Employee no: {historyModalClient.employeeNo}</span>
+                {clientIdLine(historyModalClient) && (
+                  <span className="text-xs tabular-nums text-dim">
+                    {clientIdLine(historyModalClient)!.label}: {clientIdLine(historyModalClient)!.value}
+                  </span>
                 )}
               </div>
               <button
