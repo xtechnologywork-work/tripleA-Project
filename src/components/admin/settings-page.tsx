@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Clock, Power } from 'lucide-react';
 import { getSupabase } from '@/lib/supabase';
 import { clockLabel, type OrderingView } from '@/domain/ordering';
+import { OtpSettings } from './otp-settings';
 
 const card = 'rounded-3xl bg-tile';
 
@@ -202,6 +203,9 @@ export function SettingsPage({ onChanged }: { onChanged?: () => void }) {
           Save the hours
         </button>
       </section>
+
+      {/* Sign in by SMS code */}
+      <OtpSettings />
     </div>
   );
 }

@@ -7,8 +7,8 @@ import { findEmployeeByPhone, createEmployee, employeeNoTaken } from '@/lib/supa
 import { isServerSupabaseConfigured } from '@/lib/supabase-server';
 import { getLocalDb, mergeLocal } from '@/lib/local-db';
 
-/** The code by SMS is required only when OTP_ENABLED is "true" (set it once Twilio is ready). */
-export const otpEnabled = () => process.env.OTP_ENABLED === 'true';
+/** Is the code by SMS required? Set by the team in Settings (until then, OTP_ENABLED decides). */
+export { codesRequired as otpEnabled } from '@/lib/otp-settings';
 
 /**
  * For testing on a computer without sending messages: OTP_DEV_CODE is accepted as the code.

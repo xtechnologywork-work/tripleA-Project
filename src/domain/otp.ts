@@ -52,4 +52,6 @@ export type OtpError =
   | 'EXPIRED'
   | 'BLOCKED'
   | 'NOT_READY'
+  /** Twilio refused because of the account (trial, country blocked, fraud guard, ...), not because of the person's number */
+  | 'SMS_UNAVAILABLE'
   | 'FAILED';

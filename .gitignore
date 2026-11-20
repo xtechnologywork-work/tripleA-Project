@@ -48,3 +48,6 @@ next-env.d.ts
 eslint.json
 /.next-local/
 /.next-*/
+
+# local backups of real data (phones, IDs) - never upload
+backups/

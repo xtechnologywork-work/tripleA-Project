@@ -296,6 +296,7 @@ function BayOrderingClientScreen() {
       EXPIRED: t('otpExpired'),
       BLOCKED: t('otpBlocked'),
       NOT_READY: t('otpNotReady'),
+      SMS_UNAVAILABLE: t('smsUnavailableError'),
     };
     return (code && errors[code]) || t('genericAuthError');
   };
@@ -432,8 +433,8 @@ function BayOrderingClientScreen() {
       const action = authMode === 'LOGIN' ? 'login' : 'signup';
       const { ok, data } = await requestCode(action, qatarNumber);
       if (!ok) {
-        // A Twilio error number, when there is one, helps the team find the cause
-        const ref = data.twilio?.code ? ` (${data.twilio.code})` : data.twilio?.status ? ` (${data.twilio.status})` : '';
+        // When the message service is down, a reference number helps the team find the cause (never shown for a typing mistake)
+        const ref = (data.error === 'SMS_UNAVAILABLE' || data.error === 'FAILED') && data.ref ? ` (ref ${data.ref})` : '';
         setPhoneError(authErrorText(data.error) + ref);
         return;
       }

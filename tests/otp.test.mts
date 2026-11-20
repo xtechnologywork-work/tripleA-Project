@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { qatarMobile, isCode, LIMITS, isMinistryEmployeeNo } from '../src/domain/otp.ts';
-import { twilioConfig, twilioError, sendCode, checkCode } from '../src/lib/twilio-verify.ts';
+import { twilioConfig, twilioError, twilioProblem, twilioHealth, sendCode, checkCode } from '../src/lib/twilio-verify.ts';
 
 const CONFIG = { accountSid: 'AC' + 'a'.repeat(32), authToken: 'x'.repeat(32), serviceSid: 'VA' + 'b'.repeat(32) };
 
@@ -72,12 +72,46 @@ test('Twilio errors become short answers the screen can explain', async () => {
   assert.equal(twilioError(404, 20404), 'EXPIRED');
   assert.equal(twilioError(429, 60203), 'TOO_MANY');
   assert.equal(twilioError(429, 60202), 'TOO_MANY');
-  assert.equal(twilioError(403, 60410), 'BLOCKED');
   assert.equal(twilioError(400, 60200), 'BAD_PHONE');
-  assert.equal(twilioError(401, 20003), 'NOT_READY');
+  assert.equal(twilioError(400, 21211), 'BAD_PHONE');
   assert.equal(twilioError(500, undefined), 'FAILED');
   const expired = fakeTwilio(404, { code: 20404 });
-  assert.deepEqual(await checkCode(CONFIG, '55128901', '123456', expired.fetcher), { ok: false, error: 'EXPIRED' });
+  assert.deepEqual(await checkCode(CONFIG, '55128901', '123456', expired.fetcher), { ok: false, error: 'EXPIRED', twilio: { status: 404, code: 20404 } });
+});
+
+test('a problem on the Twilio account is never blamed on the employee number', async () => {
+  // 21608: trial account (the bug seen on a real phone: a right number was told it was not valid)
+  for (const [status, code] of [[400, 21608], [403, 21408], [403, 60605], [403, 60410], [403, 60238], [401, 20003], [401, undefined], [403, undefined]]) {
+    assert.equal(twilioError(status, code), 'SMS_UNAVAILABLE', String(code ?? status));
+    assert.equal(twilioProblem(status, code).accountSide, true, String(code ?? status));
+  }
+  assert.equal(twilioProblem(400, 21608).kind, 'TRIAL');
+  assert.match(twilioProblem(400, 21608).explain, /Trial/);
+  assert.equal(twilioProblem(400, 21211).accountSide, false);
+  // sending: the refusal comes back with the Twilio number, for the admin screen
+  const trial = fakeTwilio(400, { code: 21608, message: 'unverified' });
+  assert.deepEqual(await sendCode(CONFIG, '51704550', 'en', trial.fetcher), { ok: false, error: 'SMS_UNAVAILABLE', twilio: { status: 400, code: 21608 } });
+  // sending to a Verify service that does not exist is an account problem, not an "expired code"
+  const noService = fakeTwilio(404, { code: 20404 });
+  assert.equal((await sendCode(CONFIG, '51704550', 'en', noService.fetcher)).error, 'SMS_UNAVAILABLE');
+});
+
+test('the health check reads the account type without sending anything, and never needs a value shown', async () => {
+  const env = { TWILIO_ACCOUNT_SID: CONFIG.accountSid, TWILIO_AUTH_TOKEN: CONFIG.authToken, TWILIO_VERIFY_SERVICE_SID: CONFIG.serviceSid };
+  const urls = [];
+  const get = async (url) => {
+    urls.push(url);
+    return url.includes('/Accounts/') ? { status: 200, json: async () => ({ type: 'Trial', status: 'active' }) } : { status: 200, json: async () => ({}) };
+  };
+  const h = await twilioHealth(env, get);
+  assert.deepEqual(h, { problems: [], service: 'ok', accountType: 'Trial', accountStatus: 'active' });
+  assert.equal(urls.length, 2);
+  assert.ok(urls.every((u) => !u.includes('Verifications')));
+  const missing = await twilioHealth({}, get);
+  assert.equal(missing.service, 'not checked');
+  assert.equal(missing.problems.length, 3);
+  const wrongService = await twilioHealth(env, async (url) => ({ status: url.includes('/Accounts/') ? 200 : 404, json: async () => ({ type: 'Full' }) }));
+  assert.equal(wrongService.service, 'missing');
 });
 
 test('no network never breaks the sign in, it just says it failed', async () => {

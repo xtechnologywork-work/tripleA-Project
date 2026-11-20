@@ -5,6 +5,7 @@ import { underLimits, recordEvents } from '@/lib/otp-limits';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
 import { signEmployeeToken, verifyPendingSignup } from '@/lib/employee-session';
 import { deviceOf, recordQrEvent } from '@/lib/qr-events';
+import { recordOtpOutcome } from '@/lib/otp-settings';
 import { otpEnabled, devCode, findByPhone, employeeNoUsed, createAccount } from '@/lib/otp-auth';
 
 const fail = (error: OtpError, status = 400) => NextResponse.json({ error }, { status });
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
   if (!phone) return fail('BAD_PHONE');
 
   // ---- the code ----
-  if (otpEnabled()) {
+  if (await otpEnabled()) {
     const code = String(body.code || '').replace(/\D/g, '');
     if (!isCode(code)) return fail('WRONG_CODE');
     const allowed = await underLimits([{ bucket: `check:phone:${phone}`, ...LIMITS.checkPerPhone }]);
@@ -41,10 +42,11 @@ export async function POST(req: Request) {
       if (code !== dev) return fail('WRONG_CODE');
     } else {
       const config = twilioConfig();
-      if (!config) return fail('NOT_READY', 503);
+      if (!config) return fail('SMS_UNAVAILABLE', 503);
       const checked = await checkCode(config, phone, code);
       if (!checked.ok) {
-        const status = checked.error === 'TOO_MANY' ? 429 : checked.error === 'NOT_READY' ? 503 : 400;
+        if (checked.twilio && checked.error === 'SMS_UNAVAILABLE') await recordOtpOutcome({ sent: false, twilio: checked.twilio });
+        const status = checked.error === 'TOO_MANY' ? 429 : checked.error === 'SMS_UNAVAILABLE' ? 503 : 400;
         return fail(checked.error, status);
       }
     }

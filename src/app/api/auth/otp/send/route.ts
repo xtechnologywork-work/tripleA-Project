@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { LIMITS, RESEND_SECONDS, qatarMobile, isMinistryEmployeeNo, type OtpError } from '@/domain/otp';
-import { twilioConfig, sendCode, lastTwilioRefusal } from '@/lib/twilio-verify';
+import { twilioConfig, sendCode } from '@/lib/twilio-verify';
+import { recordOtpOutcome } from '@/lib/otp-settings';
 import { underLimits, recordEvents } from '@/lib/otp-limits';
 import { rateLimit, clientIp } from '@/lib/rate-limit';
 import { signPendingSignup } from '@/lib/employee-session';
@@ -52,7 +53,7 @@ export async function POST(req: Request) {
   }
 
   // Codes switched off: the screen goes straight to step 2
-  if (!otpEnabled()) return NextResponse.json({ ok: true, skip: true, pending });
+  if (!(await otpEnabled())) return NextResponse.json({ ok: true, skip: true, pending });
 
   // Every message costs money: per number, per device and for the whole site
   const allowed = await underLimits([
@@ -71,13 +72,15 @@ export async function POST(req: Request) {
   const config = twilioConfig();
   if (!config) {
     console.error('Twilio settings are missing or malformed');
-    return NextResponse.json({ error: 'NOT_READY', twilio: 'settings' }, { status: 503 });
+    return fail('SMS_UNAVAILABLE', 503);
   }
   const sent = await sendCode(config, phone, body.lang === 'ar' ? 'ar' : 'en');
   if (!sent.ok) {
-    const status = sent.error === 'TOO_MANY' ? 429 : sent.error === 'NOT_READY' ? 503 : 400;
+    if (sent.twilio) await recordOtpOutcome({ sent: false, twilio: sent.twilio });
+    const status = sent.error === 'TOO_MANY' ? 429 : sent.error === 'SMS_UNAVAILABLE' ? 503 : 400;
     // The Twilio error number helps support find the cause; it holds nothing secret
-    return NextResponse.json({ error: sent.error, twilio: lastTwilioRefusal }, { status });
+    return NextResponse.json({ error: sent.error, ref: sent.twilio?.code }, { status });
   }
+  await recordOtpOutcome({ sent: true });
   return NextResponse.json({ ok: true, pending, resendIn: RESEND_SECONDS });
 }
