@@ -179,7 +179,7 @@ ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
 
 CREATE INDEX IF NOT EXISTS idx_employees_qid ON public.employees (qid);
 
-DO $
+DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM public.employees WHERE employee_no IS NOT NULL GROUP BY employee_no HAVING count(*) > 1) THEN
         RAISE NOTICE 'Duplicate employee numbers exist: unique rule not added. Fix them, then run this file again.';
@@ -192,7 +192,7 @@ BEGIN
     ELSE
         CREATE UNIQUE INDEX IF NOT EXISTS employees_qid_unique ON public.employees (qid) WHERE qid IS NOT NULL AND qid <> '';
     END IF;
-END $;
+END $$;
 
 
 
