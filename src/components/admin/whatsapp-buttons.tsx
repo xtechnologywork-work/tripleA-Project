@@ -64,9 +64,13 @@ export function WhatsAppButtons({ order, client, inspectionSubmitted }: { order:
       readyBay: ready?.bayCode || '',
       service: order.serviceSnapshot?.name || '',
     });
-    const link = waLink(phone, message);
+    // A phone opens the WhatsApp app; a computer opens WhatsApp Web straight on the chat, always in the same tab
+    // (WhatsApp Web refuses to run in two tabs at once)
+    const onPhone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    const link = waLink(phone, message, onPhone ? 'app' : 'web');
     if (!link) return;
-    window.open(link, '_blank', 'noopener,noreferrer');
+    const tab = window.open(link, onPhone ? '_blank' : 'triplea_whatsapp');
+    if (tab) tab.opener = null;
     setOpened(markOpened(order.id, stage));
   };
 

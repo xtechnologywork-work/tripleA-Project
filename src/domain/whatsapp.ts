@@ -27,16 +27,60 @@ export const WA_PLACEHOLDERS: { key: string; meaning: string }[] = [
   { key: '{service}', meaning: 'The wash ordered' },
 ];
 
-/** Arabic first, then English: the team does not know which one each customer reads. */
+/**
+ * Arabic first, then English: the team does not know which one each customer reads.
+ * One detail per line and no brackets: a Latin name or an order number inside an Arabic sentence is where
+ * WhatsApp mixes up the order of words.
+ */
 export const DEFAULT_WA_TEMPLATES: WaTemplates = {
-  INSPECTION:
-    'مرحباً {name}،\nتم فحص سيارتك قبل الغسيل وتوثيق حالتها بالصور (الطلب {reference}). سنبدأ العمل عليها قريباً.\n\nHello {name},\nYour car has been inspected and photographed before the wash (order {reference}). We will start shortly.\n\nTripleA',
-  ASSIGNED:
-    'مرحباً {name}،\nتم تعيين فريق TripleA لسيارتك في الموقف {parking_bay} (الطلب {reference}).\n\nHello {name},\nA TripleA team has been assigned to your car at bay {parking_bay} (order {reference}).\n\nTripleA',
-  WASHING:
-    'مرحباً {name}،\nبدأنا الآن غسيل سيارتك (الطلب {reference}). سنخبرك فور انتهائنا.\n\nHello {name},\nWe have started washing your car (order {reference}). We will let you know as soon as it is ready.\n\nTripleA',
-  READY:
-    'مرحباً {name}،\nسيارتك نظيفة وجاهزة. تجدها في الطابق {floor}، الموقف {ready_bay} (الطلب {reference}). شكراً لاختيارك TripleA.\n\nHello {name},\nYour car is clean and ready. You will find it on floor {floor}, bay {ready_bay} (order {reference}). Thank you for choosing TripleA.',
+  INSPECTION: [
+    'مرحباً {name}،',
+    'تم فحص سيارتك قبل الغسيل وتوثيق حالتها بالصور، وسنبدأ العمل عليها قريباً.',
+    'رقم الطلب: {reference}',
+    '',
+    'Hello {name},',
+    'Your car has been inspected and photographed before the wash. We will start shortly.',
+    'Order: {reference}',
+    '',
+    'TripleA',
+  ].join('\n'),
+  ASSIGNED: [
+    'مرحباً {name}،',
+    'تم تعيين فريق TripleA لسيارتك.',
+    'الموقف: {parking_bay}',
+    'رقم الطلب: {reference}',
+    '',
+    'Hello {name},',
+    'A TripleA team has been assigned to your car.',
+    'Bay: {parking_bay}',
+    'Order: {reference}',
+  ].join('\n'),
+  WASHING: [
+    'مرحباً {name}،',
+    'بدأنا الآن غسيل سيارتك، وسنخبرك فور انتهائنا.',
+    'رقم الطلب: {reference}',
+    '',
+    'Hello {name},',
+    'We have started washing your car. We will let you know as soon as it is ready.',
+    'Order: {reference}',
+    '',
+    'TripleA',
+  ].join('\n'),
+  READY: [
+    'مرحباً {name}،',
+    'سيارتك نظيفة وجاهزة.',
+    'الطابق: {floor}',
+    'الموقف: {ready_bay}',
+    'رقم الطلب: {reference}',
+    'فريق TripleA يشكرك على اختيارك.',
+    '',
+    'Hello {name},',
+    'Your car is clean and ready.',
+    'Floor: {floor}',
+    'Bay: {ready_bay}',
+    'Order: {reference}',
+    'Thank you for choosing TripleA.',
+  ].join('\n'),
 };
 
 export const WA_MAX_LENGTH = 1000;
@@ -82,8 +126,16 @@ export interface WaOrderDetails {
   service?: string;
 }
 
-/** The message with the order's details in place of {name}, {reference}, ... An unknown {word} is left as it is. */
-export function fillWaTemplate(template: string, d: WaOrderDetails): string {
+/** Unicode "first strong isolate" and "pop directional isolate": invisible, they keep a Latin name or a number in place in an Arabic line. */
+const FSI = '\u2068';
+const PDI = '\u2069';
+
+/**
+ * The message with the order's details in place of {name}, {reference}, ... An unknown {word} is left as it is.
+ * Each value is isolated (see FSI) unless `isolate` is false.
+ */
+export function fillWaTemplate(template: string, d: WaOrderDetails, opts: { isolate?: boolean } = {}): string {
+  const isolate = opts.isolate !== false;
   const values: Record<string, string> = {
     name: d.name.trim(),
     reference: d.reference,
@@ -92,7 +144,11 @@ export function fillWaTemplate(template: string, d: WaOrderDetails): string {
     ready_bay: d.readyBay || d.parkingBay,
     service: d.service || '',
   };
-  return template.replace(/\{(\w+)\}/g, (whole, key: string) => (key in values ? values[key] : whole));
+  return template.replace(/\{(\w+)\}/g, (whole, key: string) => {
+    if (!(key in values)) return whole;
+    const v = values[key];
+    return isolate && v ? FSI + v + PDI : v;
+  });
 }
 
 /** The number in the form wa.me needs (country code, digits only). A Qatar number of 8 digits gets 974. Null when unusable. */
@@ -103,10 +159,15 @@ export function waNumber(phone: string | undefined | null): string | null {
   return digits.length >= 10 && digits.length <= 15 ? digits : null;
 }
 
-/** The link that opens the customer's WhatsApp chat with the message written in. */
-export function waLink(phone: string | undefined | null, message: string): string | null {
+/**
+ * The link that opens the customer's WhatsApp chat with the message written in.
+ * "web": WhatsApp Web straight on the chat (a computer). "app": wa.me, which opens the WhatsApp app (a phone).
+ */
+export function waLink(phone: string | undefined | null, message: string, target: 'app' | 'web' = 'app'): string | null {
   const n = waNumber(phone);
-  return n ? `https://wa.me/${n}?text=${encodeURIComponent(message)}` : null;
+  if (!n) return null;
+  const text = encodeURIComponent(message);
+  return target === 'web' ? `https://web.whatsapp.com/send?phone=${n}&text=${text}` : `https://wa.me/${n}?text=${text}`;
 }
 
 /** Which step the order has reached, for each message. The inspection counts once it was sent (not skipped). */
